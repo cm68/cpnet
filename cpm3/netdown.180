@@ -1,0 +1,126 @@
+	.Z80	; Accept Z80 instruction format
+; NETDOWN - shutdown CP/NET 1.2 SNIOS and prepare for RESET
+
+	maclib	Z80.LIB
+
+cr	equ	13
+lf	equ	10
+
+cpm	equ	0
+bdos	equ	5
+
+; BDOS functions
+conin	equ	1
+print	equ	9
+getver	equ	12
+; CP/M 3 only
+callrsx	equ	60
+; NDOS functions
+netcfg	equ	69
+
+	org	0100h
+	jp	start
+
+nocpn:	defb	'Requires CP/NET 1.2',cr,lf,'$'
+rdymsg:	defb	'Ready for RESET/power-off',cr,lf
+	defb	'(press any key to resume CP/NET)$'
+xsnios:	defb	'Not a recognized SNIOS',cr,lf,'$'
+norsx:	defb	'No NDOS3 RSX or not removable',cr,lf,'$'
+
+xconp:	defw	0		; CON: word in network config table
+xcon:	defb	0		; saved CON: byte
+
+start:	ld	sp,stack
+	ld	c,getver
+	call	bdos
+	ld	a,h
+	and	02h
+	jp	z,notnet
+	ld	a,l
+	cp	30h
+	jp	nc,cpnet3
+	ld	c,netcfg
+	call	bdos
+	push	hl
+	ld	de,34		; CON: word offset
+	add	hl,de
+	ld	(xconp),hl
+	pop	ix
+	; check for at least 6 JMPs...
+	ld	c,(ix+-3)
+	ld	b,(ix+-6)
+	ld	e,(ix+-9)
+	ld	d,(ix+-12)
+	ld	l,(ix+-15)
+	ld	h,(ix+-18)
+	ld	a,c
+	and	b
+	and	e
+	and	d
+	and	l
+	and	h
+	cp	0C3h		;JMP?
+	jp	nz,notcom
+	ld	a,c
+	or	b
+	or	e
+	or	d
+	or	l
+	or	h
+	cp	0C3h		;JMP?
+	jp	nz,notcom
+	; looks OK, call NTWKDN...
+	; but first, make sure CON: is local...
+	ld	hl,(xconp)	;
+	ld	a,(hl)		;
+	ld	(xcon),a	;
+	and	01111111b
+	ld	(hl),a		;
+	ld	l,(ix+-2)
+	ld	h,(ix+-1)
+	call	callhl
+	ld	de,rdymsg
+	ld	c,print
+	call	bdos
+	ld	c,conin
+	call	bdos
+	; if we return here, just resume...
+	ld	hl,(xconp)	; restore CON:
+	ld	a,(xcon)	;
+	ld	(hl),a		;
+	jp	cpm
+
+callhl:	jp	(hl)
+
+notnet:	ld	de,nocpn
+	ld	c,print
+	call	bdos
+	jp	cpm
+
+; Not a recognized SNIOS
+notcom:	ld	de,xsnios
+	ld	c,print
+	call	bdos
+	jp	cpm
+
+cpnet3:				; CP/M 3 - use "RSXRM NDOS3"
+	ld	de,rsxpb
+	ld	c,callrsx
+	call	bdos
+	or	a
+	jp	z,cpm
+	ld	de,norsx
+	ld	c,print
+	call	bdos
+	jp	cpm
+
+rsxpb:	defb	113		; "remove" - local extension
+	defb	1		; one param, name of RSX
+	defw	ndos3		; param1: name of RSX
+
+ndos3:	defb	'NDOS3   '
+
+	defs	64
+stack:	defs	0
+
+	end

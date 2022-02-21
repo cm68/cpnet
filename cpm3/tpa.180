@@ -1,0 +1,68 @@
+;
+; print out the size of the TPA
+;
+	org	100h
+	ld	de,0
+	ld	hl,(6)
+	ld	a,h
+	rrca
+	rrca
+	and	03Fh
+loop1:
+	cp	10
+	jp	c,lt10
+	sub	10
+	ld	d,a
+	ld	a,e
+	add	a,10h
+	daa
+	ld	e,a
+	ld	a,d
+	jp	loop1
+lt10:	add	a,e
+	daa
+	push	hl
+	call	hexout
+	pop	hl
+	ld	a,h
+	and	03h
+	ld	h,a
+	ld	a,0
+	jp	z,zero
+loop2:
+	add	a,25h
+	daa
+	dec	h
+	jp	nz,loop2
+	push	af
+	ld	e,'.'
+	ld	c,2
+	call	5
+	pop	af
+	call	hexout
+zero:
+	ld	de,kmsg
+	ld	c,9
+	call	5
+	jp	0
+
+hexout:
+	push	af
+	rrca
+	rrca
+	rrca
+	rrca
+	call	hexdig
+	pop	af
+hexdig:	and	0Fh
+	add	a,90h
+	daa
+	adc	a,40h
+	daa
+	ld	e,a
+	ld	c,2
+	jp	5
+
+kmsg:	defb	'K TPA',13,10,'$'
+
+	end

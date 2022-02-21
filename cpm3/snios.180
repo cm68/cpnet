@@ -1,0 +1,368 @@
+	.Z80	; Accept Z80 instruction format
+	title	'ESP AT'
+
+;/*
+;  Copyright (C) 1980, 1981, 1982
+;  Digital Research
+;  P.O. Box 579
+;  Pacific Grove, CA 93950
+;
+;  Revised:  October 5, 1982
+;*/
+
+;
+; this code is for an espressif running the AT command set.  we
+; are using the serial I/O nic code to talk to the AT pipeline
+; this is greatly simplified from the DRI-serial code, since
+; the ESP is running TCP/IP, and we can assume reliable transport
+; thus, there is no need to count retries.  if the link is dead,
+; it's dead.
+;
+; Feb 14, 2022
+; assemble with SLRZ80, SLR180 or M80
+;
+; we try really hard to avoid buffer copies, so the underlying
+; code will do scatter write and gather read.  this would be 2
+; extra copies on top of what the NDOS is already doing.  what
+; the NDOS should be doing is sending us an IO vector where
+; to get/put the header and where to get/put the actual data payload
+;
+	include	mk4.lib
+
+	public	ntwkin,ntwkst
+	public	CNFTBL,SNDMSG,RCVMSG,NTWKER,NTWKBT,NTWKDN,CFGTBL
+
+	extrn	espreset
+	extrn	sreset
+	extrn	wrtread
+	extrn	atcmd
+	extrn	atcmdl
+	extrn	ismatch
+	extrn	itoa
+	extrn	atoi
+	extrn	delay
+	extrn	retbuf
+	extrn	debugf
+	extrn	strcpy
+	extrn	dprint
+	extrn	hexdump
+
+	cseg
+
+; Initial Slave Configuration Table - must be first in module
+cfgtbl:
+networkstatus:
+
+	defb	0		; network status byte
+	defb	0FFh		; slave processor ID number
+	defw	0		; A:  Disk device
+	defw	0		; B:   "
+	defw	0		; C:   "
+	defw	0		; D:   "
+	defw	0		; E:   "
+	defw	0		; F:   "
+	defw	0		; G:   "
+	defw	0		; H:   "
+	defw	0		; I:   "
+	defw	0		; J:   "
+	defw	0		; K:   "
+	defw	0		; L:   "
+	defw	0		; M:   "
+	defw	0		; N:   "
+	defw	0		; O:   "
+	defw	0		; P:   "
+
+	defw	0		; console device
+
+	defw	0		; list device:
+	defb	0		;	buffer index
+	defb	0		;	FMT
+	defb	0		;	DID
+	defb	0FFh		;	SID (CP/NOS must still initialize)
+	defb	5		;	FNC
+	defb	0		;	SIZ
+	defb	0		;	MSG(0)  List number
+msgbuf:				; temp message, do not disturb LST: header
+	defs	128		;	MSG(1) ... MSG(128)
+
+msgadr:
+	defs	2		; message address
+
+;
+; Network Status Byte Equates
+;
+active	equ	00010000b	; slave logged in on network
+rcverr	equ	00000010b	; error in received message
+senderr	equ	00000001b	; unable to send message
+
+cmdbuf:	ds	128
+
+;
+; NDos calls this to initialize the transport
+; Network Initialization
+;
+ntwkin:
+	ld	a,0
+	ld	(debugf),a
+
+	call	sreset
+	jp	c,initerr
+
+	ld	a,2
+	call	espreset	; reset the esp with connect
+	jp	c,initerr
+
+	ld	a,1		; we have a fixed slave ID
+	ld	(msgbuf+1),a
+	ld	(cfgtbl+1),a
+
+	ld	a,active
+	ld	(cfgtbl+0),a
+
+	xor	a		; clean return
+	ret
+
+initerr:
+	ld	a,0FFh
+	or	a
+	ret
+;
+; Network Status
+; basically return the networkstatus byte, clearing any
+; recv and send error bits as a side effect
+;
+ntwkst:
+	ld	a,(networkstatus)
+	ld	b,a
+	and	not (rcverr+senderr)
+	ld	(networkstatus),a
+	ld	a,b
+	ret
+;
+; Return Configuration Table Address
+;
+cnftbl:
+	ld	hl,cfgtbl
+	ret
+
+;
+; Send Message on Network
+; address of message is in BC.  
+; the size is encoded in BC+4
+; return with A == 0ffh if error, else 0 if ok
+;
+; note that this interface is inherently inefficent, since
+; it requires the caller to set up a single contiguous message
+; containing the 5 byte frame prepended to the payload
+;
+; in the underlying transport, we don't want to copy it again,
+; so we use a gather write primitive to send our payload
+; (which is really the NDOS header plus the real payload)
+;
+atput:	db	'AT+CIPSEND=',0		; send fixed data length
+atputr:	db	CR,LF,'OK',CR,LF,CR,LF,'>',0
+crlf:	db	CR,LF,0
+sbad:	db	'ERROR',CR,LF,0
+
+wma:	dw	0
+wlen:	dw	0
+clen:	db	0
+
+sndmsg:
+sndmsg0:
+	ld	(wma),bc	; save header + payload address
+	inc	bc
+	inc	bc
+	ld	a,(cfgtbl+1)
+	ld	(bc),a 		; place SID into header
+	inc	bc
+	inc	bc
+	ld	a,(bc)		; get length
+	add	a,6		; 5 for header, plus 0 means 1.
+	ld	(wlen),a
+
+	ld	hl,atput	; build command
+	ld	de,cmdbuf
+	call	strcpy
+
+	ld	hl,(wlen)	; get payload length
+	call	itoa
+	add	a,11+2		; command plus cr,lf
+	ld	(clen),a
+	ld	hl,crlf
+	call	strcpy
+
+	ld	hl,cmdbuf	; send out send command
+	ld	a,9		
+	call	atcmd
+	jr	c,slose
+
+	ld	de,retbuf	; we need: 'cr lf OK cr lf cr lf >'
+	ld	hl,atputr
+	call	ismatch
+	jr	nz,slose
+
+	ld	a,(wlen)	; send header+payload
+	ld	c,a
+	ld	a,7		; we can expect 'ERRORcrlf'
+	ld	hl,(wma)	; payload address
+	call	atcmdl
+	jr	c,slose
+	
+	ld	de,retbuf	; check if we failed
+	ld	hl,sbad
+	call	ismatch
+	jr	z,slose
+
+	xor	a
+	ret
+
+slose:	ld	a,0ffh
+	ret
+
+;
+; Receive Message from Network
+;
+; we really just poll until we can read our response.
+; and then we do so.
+; again, we do a scatter read to split the payload from our framing
+; that is necessitated by the AT command
+; we are called with BC pointing at the NDOS header plus expected
+; payload.
+
+;
+; AT literal command fragments and expected responses
+; responses are null-terminated
+;
+glen:	db	'AT+CIPRECVLEN?',CR,LF,0	; get socket readable length
+atget:	db	'AT+CIPRECVDATA=',0
+avlen:	dw	0				; how much we can read
+dlen:	db	0				; length of our count
+rma:	dw	0				; recv buffer address
+rlen:	dw	0
+
+rcvmsg:	
+	ld	(rma),bc	; send poll command
+
+rpoll:	ld	hl,glen
+	ld	de,cmdbuf
+	call	strcpy
+
+	ld	hl,cmdbuf
+	ld	a,16		; all we are interested in
+	call	atcmd
+	ld	a,'0'
+	jp	c,rlose
+
+	ld	hl,retbuf+11	; +CIPRECVLEN:<int>,<int>...crlf
+	ld	a,':'
+	cp	(hl)
+	jp	nz,rwait
+	inc	hl
+	ex	de,hl
+	call	atoi		; get length of available data
+	ld	(avlen),hl
+	ld	a,h
+	or	a
+	ld	a,'2'
+	jr	nz,rlose
+	ld	a,l
+	cp	6		; shortest possible packet
+	jr	nc,rdata
+rwait:	ld	hl,08000h
+wl:	dec	hl
+	ld	a,h
+	or	l
+	jr	nz,wl
+	jr	rpoll
+
+rdata:	ld	hl,atget	; build recv command
+	ld	de,cmdbuf
+	call	strcpy
+	ld	hl,(avlen)
+	call	itoa
+	ld	(dlen),a
+	ld	hl,crlf
+	call	strcpy
+
+	ld	hl,(avlen)
+	ld	a,(dlen)
+	add	13+1		; '+CIPRECVDATA:' and ','
+	add	l		; and how much data expected
+	add	4		; OKcrlf
+	ld	hl,cmdbuf
+	call	atcmd
+	ld	a,'3'
+	jr	c,rlose
+
+	ld	hl,retbuf	; find the payload
+rsrch:	ld	a,(hl)
+	inc	hl
+	cp	','		; it's after the comma
+	jr	nz,rsrch
+
+	ld	de,4
+	ex	de,hl
+	add	hl,de
+	ld	c,(hl)
+	ld	b,0
+	inc	bc
+	ld	(rlen),bc
+	ex	de,hl
+	ld	de,(rma)
+	ldir
+
+	if	0
+	ld	hl,(rma)
+	ld	bc,(rlen)	
+	call	hexdump
+	endif
+
+	xor	a
+	ret
+
+rlose:	push	af
+	ld	a,'@'
+	call	dprint
+	pop	af
+	call	dprint
+	ld	hl,cmdbuf
+	ld	c,040h
+	call	hexdump
+	ld	hl,retbuf
+	ld	c,040h
+	call	hexdump
+	ld	a,0ffh
+	ret
+	
+ntwker:
+ntwrkerror:
+
+				;  perform any required device
+	ret			;     re-initialization
+
+;
+ntwkbt:
+
+;	This procedure is called each time the CCP is
+;  	reloaded from disk.  This version prints "<WARM BOOT>"
+;  	on the console and then returns, but anything necessary
+;       for restart can be put here.
+
+; 	mvi	c,print
+;	lxi	d,wboot$msg
+;	jmp	BDOS
+	xor	a
+	ret
+
+ntwkdn:				; shutdown server - FNC=254 (no response)
+	ld	ix,msgbuf
+	ld	(ix+0),0	; FMT
+	ld	(ix+3),0FEh	; BDOS Func
+	ld	(ix+4),0	; Size
+	ld	bc,msgbuf
+	call	sndmsg0		; avoid active check
+	xor	a
+	ret
+
+	end

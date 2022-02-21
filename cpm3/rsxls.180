@@ -1,0 +1,165 @@
+; Generic RSX list utility.
+; Lists all installed RSXs
+;
+;	rsxls	= short listing (names only)
+;	rsxls l	= long listing (details)
+;
+; Always lists in order "bottom to top" (LOADER3 last)
+
+cr	equ	13
+lf	equ	10
+
+; System page-0 constants
+cpm	equ	0
+bdos	equ	5
+deffcb	equ	5Ch
+defdma	equ	80h
+
+; BDOS functions
+conout	equ	2
+print	equ	9
+
+; LOADER3 is always installed at this point.
+
+	org	100h
+	ld	sp,stack
+
+	ld	a,(deffcb+1)
+	cp	'L'
+	ld	de,header
+	ld	c,print
+	call	z,bdos
+
+	ld	ix,(bdos+1)
+	; check for no RSXs
+	ld	a,(ix+3)
+	cp	0C3h		; JMP?
+	jp	nz,none		; SID/etc?
+	;might be RESBDOS3
+	ld	a,(ix+6)
+	cp	0C3h		; JMP?
+	jp	z,none		; RESBDOS3...
+dup1:
+	call	show
+	ld	a,(ix+18)	; LOADER3?
+	cp	0FFh
+	jp	z,done
+	ld	l,(ix+4)	; next RSX...
+	ld	h,(ix+5)	;
+	push	hl
+	pop	ix
+	jp	dup1
+
+norsx:	defb	'No RSXs loaded',cr,lf,'$'
+
+none:	ld	de,norsx
+	ld	c,print
+	call	bdos
+done:	jp	cpm
+
+show:	ld	a,(deffcb+1)
+	cp	'L'
+	jr	z,long
+	call	pname
+	call	crlf
+	ret
+
+header:	defb	cr,lf
+	defb	'ADDR NAME     PREV RM BK LD'
+	defb	cr,lf,'$'
+
+long:	call	rsxadr
+	call	blank
+	call	pname
+	call	blank
+	call	prev
+	call	blank
+	call	remove
+	call	blank
+	call	banked
+	call	blank
+	call	loader
+	call	crlf
+	ret
+
+pname:	push	ix
+	pop	hl
+	ld	de,10		; offset of name
+	add	hl,de
+	ld	b,8
+name0:	ld	a,(hl)
+	call	chrout
+	inc	hl
+	djnz	name0
+	ret
+
+prev:	ld	l,(ix+6)	; offset of prev
+	ld	h,(ix+7)	;
+	jp	hexadr
+
+remove:	ld	a,(ix+8)	; offset of remove flag
+	jp	hexout
+
+banked:	ld	a,(ix+9)	; offset of banked flag
+	jp	hexout
+
+loader:	ld	a,(ix+18)	; offset of first loader byte
+	call	hexout
+	ld	a,','
+	call	chrout
+	ld	a,(ix+19)	; second loader byte
+	call	hexout
+	ld	a,','
+	call	chrout
+	ld	a,(ix+19)	; third loader byte
+	jp	hexout
+
+; print address of current RSX
+rsxadr:	push	ix
+	pop	hl
+	;jmp	hexadr
+; print HL as hex
+hexadr:	ld	a,h
+	call	hexout
+	ld	a,l
+	;jmp	hexout
+; print A in hex
+hexout:	push	af
+	rlca
+	rlca
+	rlca
+	rlca
+	call	hexdig
+	pop	af
+	;jmp	hexdig
+hexdig:	and	0Fh
+	add	a,90h
+	daa
+	adc	a,40h
+	daa
+	;jmp	chrout
+chrout:	push	ix
+	push	hl
+	push	de
+	push	bc
+	ld	e,a
+	ld	c,conout
+	call	bdos
+	pop	bc
+	pop	de
+	pop	hl
+	pop	ix
+	ret
+
+crlf:	ld	a,cr
+	call	chrout
+	ld	a,lf
+	jr	chrout
+
+blank:	ld	a,' '
+	jr	chrout
+
+	defs	64
+stack:	defs	0
+
+	end

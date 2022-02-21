@@ -1,0 +1,176 @@
+	.Z80	; Accept Z80 instruction format
+	title	'LOGIN Transient Program'
+
+;***************************************************************
+;***************************************************************
+;**                                                           **
+;**       L O G I N   T r a n s i e n t   P r o g r a m       **
+;**                                                           **
+;***************************************************************
+;***************************************************************
+
+;
+; Equates
+;
+bdos	equ	0005h
+buff	equ	0080h
+
+print	equ	9
+version	equ	12
+login	equ	64
+cfgtbl	equ	69
+
+active	equ	00010000b
+
+start:
+	ld	hl,0
+	add	hl,sp
+	ld	sp,ccpstack+2
+	push	hl		; save CCP stack pointer
+	ld	c,version
+	call	bdos		; get version number
+	ld	a,h
+	and	00000010b
+	jp	z,versionerr	; jump if CP/Net not loaded
+	ld	de,passwordmsg
+	ld	hl,buff
+	ld	a,(hl)		; get # chars in the command tail
+	or	a
+	jp	z,dologin	; default login if empty command tail
+	push	de		; save login msg address
+	ld	c,a		; A = # chars in command tail
+	xor	a
+	ld	b,a		; B will accumulate master ID
+scanblnks:
+
+	inc	hl
+	ld	a,(hl)
+	cp	' '
+	jp	nz,pastblnks	; skip past leading blanks
+	dec	c
+	jp	nz,scanblnks
+	jp	prelogin	; jump if command tail exhausted
+pastblnks:
+
+	cp	'['
+	jp	z,scanmstrid
+	pop	de		; discard old login msg adr
+	ld	de,blankmsg
+	push	de		; push new login msg adr
+scanlftbrkt:
+
+	ld	a,(hl)
+	cp	'['
+	jp	z,scanmstrid
+	inc	de
+	ld	(de),a		;update the password
+	inc	hl
+	dec	c
+	jp	nz,scanlftbrkt
+	jp	prelogin
+scanmstrid:
+
+	inc	hl
+	dec	c
+	jp	z,loginerr
+	ld	a,(hl)
+	cp	']'
+	jp	z,prelogin
+	sub	'0'
+	cp	10
+	jp	c,updateid
+	add	a,0+('0'-'A'+10) and 0FFh
+	cp	16
+	jp	nc,loginerr
+updateid:
+
+	push	af
+	ld	a,b
+	add	a,a
+	add	a,a
+	add	a,a
+	add	a,a
+	ld	b,a		; accum * 16
+	pop	af
+	add	a,b
+	ld	b,a
+	jp	scanmstrid
+
+prelogin:
+
+	ld	a,b
+	pop	de
+	ld	(de),a
+
+dologin:
+
+	ld	c,login
+	call	bdos
+	inc	a
+	jp	nz,loginok
+	ld	de,loginfailedmsg
+	jp	printmsg
+
+versionerr:
+
+	ld	de,versionerrmsg
+	jp	printmsg
+
+loginerr:
+
+	ld	de,loginerrmsg
+printmsg:
+
+	ld	c,print
+	call	bdos
+	jp	exit
+
+loginok:
+
+	ld	c,cfgtbl
+	call	bdos		; get configuration table address
+	ld	a,(hl)
+	or	active		; set active bit true
+	ld	(hl),a
+exit:
+	pop	hl
+	ld	sp,hl		; restore CCP stack pointer
+	ret
+
+;
+; Local Data Segment
+;
+passwordmsg:
+
+	defb	00h		; Master ID #
+	defb	'PASSWORD'	; password
+
+
+versionerrmsg:
+
+	defb	'CP/Net is not loaded.'
+	defb	'$'
+
+loginerrmsg:
+
+	defb	'Illegal LOGIN command.'
+	defb	'$'
+
+loginfailedmsg:
+
+	defb	'LOGIN failed.'
+	defb	'$'
+
+lclstack:
+
+	defw	0C7C7h,0C7C7h,0C7C7h,0C7C7h,0C7C7h
+	defw	0C7C7h,0C7C7h,0C7C7h,0C7C7h,0C7C7h
+ccpstack:
+
+	defw	$-$
+
+blankmsg:
+
+	defb	00h		; Master ID #
+	defb	'        '	; password
+	end	start

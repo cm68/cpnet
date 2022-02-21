@@ -1,0 +1,252 @@
+	.Z80	; Accept Z80 instruction format
+; A version of CPNETSTS that minimizes output
+
+	org	00100h
+
+	jp	start
+
+l0103h:	defb	13,10,'CP/NET Status'
+	defb	13,10,'============='
+	defb	13,10,'$'
+l012ch:	defb	'Requester ID = $'
+l013ch:	defb	13,10,'Network Status Byte = $'
+l0155h:	defb	13,10,'Device status:'
+	defb	13,10,'$'
+l016dh:	defb	'  Drive $'
+l0176h:	defb	' = Drive $'
+l0180h:	defb	' on Network Server ID = $'
+l01a2h:	defb	'  Console Device = $'
+l01b4h:	defb	'Console #$'
+l01ddh:	defb	'  List Device = $'
+l01ech:	defb	'List #$'
+l01hhh:	defb	'  All LOCAL$'
+l0212h:	defb	13,10,'CP/NET has not been loaded.$'
+
+start:
+	ld	hl,0
+	add	hl,sp
+	ld	(usrstk),hl
+	ld	sp,stack
+	call	getver
+	ld	a,h
+	and	02h
+	jp	z,nocpnt
+
+	ld	bc,l0103h	; Intro
+	call	msgout
+	call	getcfg
+	ld	(nettbl),hl
+	ld	bc,l012Ch	; Req ID (client ID)
+	call	msgout
+	ld	hl,(nettbl)
+	inc	hl
+	ld	c,(hl)
+	call	hexout
+	ld	bc,l013Ch	; Net Sts Byte
+	call	msgout
+	call	getsts
+	ld	c,a
+	call	hexout
+	ld	bc,l0155h	; Disk device status:
+	call	msgout
+	xor	a
+	ld	(count),a
+	ld	(curdrv),a
+drvlup:
+	ld	a,(curdrv)
+	cp	16
+	jp	nc,trycon	; Done with drives A-P...
+
+	ld	l,a
+	ld	h,0
+	add	hl,hl		; *2 - 2 bytes per drive
+	inc	hl
+	inc	hl		; +2 - 2 bytes before drives
+	ex	de,hl
+	ld	hl,(nettbl)
+	add	hl,de
+	ld	a,(hl)
+	and	080h
+	jp	z,locdrv	; drive is local...
+
+	push	hl
+	ld	a,(count)
+	or	a
+	call	nz,crlf
+	ld	hl,count
+	inc	(hl)
+	ld	bc,l016Dh	; Drive...
+	call	msgout
+	ld	a,(curdrv)
+	add	a,'A'
+	ld	c,a
+	call	chrout
+	ld	c,':'
+	call	chrout
+	ld	bc,l0176h	; = Drive... i.e. REMOTE
+	call	msgout
+	pop	hl
+	push	hl
+	ld	a,(hl)
+	and	00Fh		; remote drive number
+	add	a,'A'
+	ld	c,a
+	call	chrout
+	ld	c,':'
+	call	chrout
+	ld	bc,l0180h	; on server...
+	call	msgout
+	pop	hl
+	inc	hl
+	ld	a,(hl)		; server ID
+	ld	c,a
+	call	hexout
+locdrv:				; Drive is LOCAL...
+	ld	hl,curdrv
+	inc	(hl)
+	jp	drvlup
+
+trycon:
+	ld	bc,00022h
+	ld	hl,(nettbl)
+	add	hl,bc
+	ld	a,(hl)
+	and	080h
+	jp	z,trylst
+
+	push	hl
+	ld	a,(count)
+	or	a
+	call	nz,crlf
+	ld	hl,count
+	inc	(hl)
+	ld	bc,l01A2h	; Console Device = ...
+	call	msgout
+	ld	bc,l01B4h	; Console #
+	call	msgout
+	pop	hl
+	push	hl
+	ld	a,(hl)
+	call	hexdig
+	ld	bc,l0180h	; on Network Server ID =
+	call	msgout
+	pop	hl
+	inc	hl
+	ld	a,(hl)
+	ld	c,a
+	call	hexout
+
+trylst:
+	ld	bc,00024h
+	ld	hl,(nettbl)
+	add	hl,bc
+	ld	a,(hl)
+	and	080h
+	jp	z,done
+
+	push	hl
+	ld	a,(count)
+	or	a
+	call	nz,crlf
+	ld	hl,count
+	inc	(hl)
+	ld	bc,l01DDh	; List Device =
+	call	msgout
+	ld	bc,l01ECh	; List #
+	call	msgout
+	pop	hl
+	push	hl
+	ld	a,(hl)
+	call	hexdig
+	ld	bc,l0180h	; on Network Server ID =
+	call	msgout
+	pop	hl
+	inc	hl
+	ld	a,(hl)
+	ld	c,a
+	call	hexout
+done:
+	ld	a,(count)
+	or	a
+	jp	nz,exit
+	ld	bc,l01HHh
+	call	msgout
+	jp	exit
+
+nocpnt:
+	ld	bc,l0212h	; CP/NET has not been loaded
+	call	msgout
+exit:
+	ld	hl,(usrstk)
+	ld	sp,hl
+	ret
+
+chrout:
+	ld	e,c
+	ld	c,002h
+	call	00005h
+	ret
+
+msgout:
+	ld	d,b
+	ld	e,c
+	ld	c,009h
+	call	00005h
+	ret
+
+getver:
+	ld	c,12
+	call	00005h
+	ret
+
+getsts:
+	ld	c,044h
+	call	00005h
+	ret
+
+getcfg:
+	ld	c,045h
+	call	00005h
+	ret
+
+crlf:
+	ld	c,13
+	call	chrout
+	ld	c,10
+	call	chrout
+	ret
+
+hexout:
+	push	bc
+	ld	a,c
+	rrca
+	rrca
+	rrca
+	rrca
+	call	hexdig
+	pop	bc
+	ld	a,c
+	call	hexdig
+	ld	c,'H'
+	call	chrout
+	ret
+
+hexdig:
+	and	0Fh
+	add	a,90h
+	daa
+	adc	a,40h
+	daa
+	ld	c,a
+	jp	chrout
+
+	defs	40
+stack:	defs	0
+usrstk:	defw	0
+count:	defb	0
+curdrv:	defb	0
+nettbl:	defw	0
+
+	end
+	
+	adc	a,40h

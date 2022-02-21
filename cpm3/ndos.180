@@ -1,0 +1,1568 @@
+	.Z80	; Accept Z80 instruction format
+;	NETWORK DISK OPERATING SYSTEM FOR CP/NET on CP/M Plus v3
+;
+; 1982.12.31. exact date unknown
+; 2016.05.20. adapted for RSX on CP/M Plus
+;	Dropped support for remote console/list, due to BIOS intercept issues.
+;	BIOS intercept is a problem because of the transient nature of RSXs.
+;	Could add back support for "well-behaved" LIST OUTPUT users,
+;	provided BIOS intercept is not required.
+; 2022.02.20. z80 syntax.
+
+;TITLE	NETWORK DISK OPERATING SYSTEM FOR CP/NET SLAVE
+
+	public	next
+	ext	ntwkin, ntwkst, cnftbl, sndmsg, rcvmsg, ntwkbt, cfgtbl
+;
+;
+;	EQUATIONS OF DATA
+;
+lf	equ	0Ah		;LINE FEED
+cr	equ	0Dh		;CARRIAGE RETURN
+eof	equ	1Ah		;CTRL-Z IS END OF FILE
+leof	equ	0FFh		;-1 is logical end of file
+;
+top	equ	0000h
+cdisk	equ	0004h
+bdos	equ	0005h
+sysdma	equ	0080h
+tpa	equ	0100h
+
+sctlng	equ	128		;ONE SECTOR LENGTH
+;
+;	EQUATIONS OF DOS FUNCTION
+;
+ccndin	equ	3		;CONSOLE INPUT WITH DEVICE CODE
+ccndot	equ	4		;CONSOLE OUTPUT WITH DEVICE CODE
+cbufpr	equ	9		;BUFFER PRINT
+crdbuf	equ	10		;READ BUFFER
+cconst	equ	11		;GET CONSOLE STATUS
+cgetvr	equ	12		;GET VERSION NUMBER
+crsdsk	equ	13		;RESET DISK
+copen	equ	15		;OPEN FILE
+cclose	equ	16		;CLOSE FILE
+csrfst	equ	17		;SEARCH FIRST
+csrnxt	equ	18		;SEARCH NEXT DIRECTORY
+cread	equ	20		;READ SEQ
+cwrite	equ	21		;WRITE SEQ
+cstdma	equ	26		;SET DMA ADDRESS
+cgtall	equ	27		;get alloc vector addr
+cgtdpb	equ	31		;get DPB addr
+cstusc	equ	32		;SET USER CODE
+crread	equ	33		;READ SEQ
+crwrit	equ	34		;WRITE SEQ
+crsdsn	equ	37		;RESET DISK BY DISK VERCTOR
+cfrsp	equ	46		; get disk free space
+scbf	equ	49		; get/set SCB
+cbios	equ	50		; direct BIOS call
+covly	equ	59		; load overlay
+crsx	equ	60		; call RSX function
+cdefpw	equ	106		;set default password
+clsblk	equ	112		; List Block - does not fit in table...
+
+cbmax	equ	50		;MAX OF BDOS FUNCTION - CXMIN.. collapsed here
+cxmin	equ	98		;extended bdos functions base - collapse into CBMAX
+;
+cnmin	equ	64		;MIN OF NDOS FUNCTION
+clogin	equ	64		;LOGIN
+clogof	equ	65		;LOGOFF
+cnmax	equ	72		;MAX OF NDOS FUNCTION
+
+;
+;	SLAVE CONFIGRATION TABLE
+;
+; -1	NETWORK STATUS
+;	0	SLAVE PROCESSOR ID
+;	1-32 A - P DISK DEVICE CODE
+; 33-34 CONSOLE DEVICE
+; 35-36 LIST DEVICE
+; 37	LIST BUFFER COUNTER
+; 38-42 MESSAGE HEADER FOR LIST OUT
+; 43	LISTER DEVICE NUMBER
+; 44-171 LIST OUT DATA BUFFER
+;
+;	EACH DEVICE DATA USED 2 BYTES
+;	IN 1-36
+;	1B:BIT 7 H ON NETWORK
+;	BIT 6 H SET UP IN DISK
+;	BIT 0-3 DEVICE NUMBER IN MASTER
+;	2B:MASTER ID
+;
+;	BIAS TO DATA IN CONFIGRATION TABLE
+;
+bsrid	equ	1		;client ID
+bsdsks	equ	2		;first byte in disk table
+bsdske	equ	33		;last byte in disk table
+bscons	equ	34		;BIAS TO CONSOLE DATA
+bslist	equ	36		;BIAS TO LISTER DATA
+
+fcbrr0	equ	33		; offset of RR0 field in FCB (not FCB in MSG)
+
+scbase	equ	09Ch		; base address of SCB within page
+
+	org	0
+
+;	RSX Prefix
+serial:	defb	0,0,0,0,0,0
+start:	jp	coldst
+next:	jp	0
+prev:	defw	0
+remove:	defb	0		; 0ffh for remove
+nonbank:
+
+	defb	0
+rsxnam:	defb	'NDOS3   '
+loader:	defb	0,0,0
+
+ioport:	defb	018h		; could be patched here
+
+	defb	'COPYRIGHT (C) 1980-82, DIGITAL RESEARCH '
+	defb	0,0,0,0,0,0
+
+nderrm:	defb	cr,lf,'NDOS Err $'
+nderr2:	defb	', Func $'
+
+bdose:	defw	0
+cursid:	defb	0
+scbadr:	defw	0
+
+msgtop:	defb	0
+msgid:	defb	0
+	defb	0		; We assume network hw/sw sets this.
+msgfun:	defb	0
+msgsiz:	defb	0
+msgdat:	defs	256
+
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+	defb	0C7h,0C7h,0C7h,0C7h,0C7h,0C7h
+stack:	defs	0
+
+ustack:	defw	0
+funcod:	defb	0
+paramt:	defw	0
+retcod:	defb	0
+mcrpnt:	defw	0
+lstunt:	defb	0
+f5setf:	defb	0
+fntmpf:	defb	0
+orgbio:	defw	0
+
+hexmsg:	defb	0,0,'$'
+
+clderr:	defb	'Init err$'
+
+coldse:				; BC and DE are pushed...
+	ld	de,clderr
+	ld	c,cbufpr
+	call	next
+	ld	hl,next
+	ld	(start+1),hl	; only until remove takes place...
+	ld	a,0FFh
+	ld	(remove),a
+	pop	bc
+	pop	de
+	jp	next		; pass to BDOS and hope for the best...
+
+; Not a true cold start - we are in context of a valid BDOS call...
+coldst:
+	push	de
+	push	bc
+	call	ntwkin
+	or	a
+	jp	nz,coldse
+	ld	hl,ndose
+	ld	(start+1),hl
+	xor	a		;
+	ld	(remove),a	; is the required?
+	ld	hl,msgdat
+	ld	(mcrpnt),hl
+	; Apparently, it is passe to use BDOS calls for certain things...
+	ld	de,scbadd
+	ld	c,scbf
+	call	next
+	ld	(scbadr),hl
+	ld	de,cstup
+	ld	c,cbufpr
+	call	next
+	pop	bc
+	pop	de
+	jp	next
+
+scbadd:	defb	03Ah, 0
+
+bdermd:	ld	hl,(scbadr)
+	ld	l,scbase+4Bh
+	ld	a,(hl)
+	ret
+
+sysmsc:	ld	hl,(scbadr)
+	ld	l,scbase+4Ah
+	ld	a,(hl)
+	ret
+
+curusr:	ld	hl,(scbadr)
+	ld	l,scbase+44h
+	ld	a,(hl)
+	ret
+
+; Some sneaky programs, like ERASE.COM, use the "saved search address" from the SCB.
+; so we must put the address there if the BDOS does not (i.e. networked drive).
+setsra:	ld	hl,(paramt)
+	ex	de,hl
+	ld	hl,(scbadr)
+	ld	l,scbase+47h
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+	ret
+
+setdsk:	ld	hl,(scbadr)
+	ld	l,scbase+3Eh
+	ld	a,(paramt)
+	ld	(hl),a
+	ret
+
+curdsk:	ld	hl,(scbadr)
+	ld	l,scbase+3Eh
+	ld	a,(hl)
+	ret
+
+dmaadd:	ld	hl,(scbadr)
+	ld	l,scbase+3Ch
+	ld	a,(hl)
+	inc	hl
+	ld	h,(hl)
+	ld	l,a
+	ret
+
+cstup:	defb	'NDOS3 Started.',cr,lf,'$'
+cstdn:	defb	'NDOS3 Ending.',cr,lf,'$'
+;wbmsg:	DB	'NDOS3 Warm-boot.',CR,LF,'$'
+
+ndose:
+	ld	a,c		; must save REAL function code!
+	ld	(funcod),a
+	ld	(msgfun),a
+	or	a
+	jp	z,warmst
+	cp	covly
+	jp	z,ldovly	; LOAD OVERLAY (RSX SCRUB) - indication of warm boot
+	cp	crsx
+	jp	z,calrsx	; used to unload CP/Net
+	cp	cbios
+	jp	z,next		; DIRECT BIOS CALL - might need to trap for LIST OUT
+
+	ld	hl,funtbs
+xxx:
+	ld	a,c
+	sub	(hl)
+	jp	c,next
+	inc	hl
+	cp	(hl)
+	inc	hl
+	jp	c,ndose2
+	inc	hl
+	inc	hl
+	ld	a,(hl)
+	or	a
+	jp	nz,xxx
+	jp	next
+
+ndose2:
+	ld	(ustack),sp
+	ld	sp,stack
+	ld	c,a		; modified func code!
+	ld	a,(hl)
+	inc	hl
+	ld	h,(hl)
+	ld	l,a		; HL = func table
+	push	hl
+	ex	de,hl
+	ld	(paramt),hl
+	call	dmaadd
+	ld	(dmaadr),hl	; cache DMA address for this call...
+	ld	hl,msgsiz
+	ld	(hl),0		; assume 1-byte payload
+	inc	hl
+	ld	(mcrpnt),hl	; MSGDAT
+	xor	a
+	ld	b,a
+	ld	d,a
+	pop	hl		; specific func table in HL
+	add	hl,bc
+	ld	e,(hl)		; don't need HL anymore
+	sub	e		; assumes A=0
+	jp	z,tnextp	; code 0 = not handled by CP/Net
+ndose4:
+	ld	hl,ndendr
+	push	hl
+	ld	hl,funtb2
+	add	hl,de
+	push	hl
+ndose5:
+	pop	bc
+	ld	a,(bc)
+	ld	d,a
+	and	07Fh		; strip off EOP bit
+	ld	e,a
+	ld	a,d
+	ld	d,0
+	ld	hl,funtb3
+	add	hl,de
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	inc	bc
+	rla
+	jp	c,ndose6
+	push	bc
+	ld	hl,ndose5
+	push	hl
+ndose6:
+	ex	de,hl
+	jp	(hl)
+
+funtb3:
+	defw	0		; 0	000h	080h - never called
+	defw	sndhdr		; 2	002h	082h
+	defw	rcvpar		; 4	004h	084h
+	defw	sndfcb		; 6	006h	086h
+	defw	cksfcb		; 8	008h	088h
+	defw	rentmp		; 10	00ah	08ah
+	defw	wtdtc2		; 12	00ch	08ch
+	defw	wtdtc8		; 14	00eh	08eh
+	defw	wtdtcp		; 16	010h	090h
+	defw	ckstdk		; 18	012h	092h
+	defw	bcstfn		; 20	014h	094h
+	defw	bcstvc		; 22	016h	096h
+	defw	rcvec		; 24	018h	098h
+	defw	gtfcb		; 26	01ah	09ah
+	defw	gtfccr		; 28	01ch	09ch
+	defw	gtfcrr		; 30	01eh	09eh
+	defw	gtdire		; 32	020h	0a0h
+	defw	gtosct		; 34	022h	0a2h
+	defw	gtmisc		; 36	024h	0a4h
+	defw	gtlogv		; 38	026h	0a6h
+	defw	list1		; 40	028h	0a8h
+	defw	seldsk		; 42	02ah	0aah
+	defw	lstblk		; 44	02ch	0ach
+	defw	getver		; 46	02eh	0aeh
+	defw	0		; 48	030h	0b0h - to be removed
+	defw	reset		; 50	032h	0b2h
+	defw	nwstat		; 52	034h	0b4h
+	defw	nwcftb		; 54	036h	0b6h
+	defw	sdmsgu		; 56	038h	0b8h
+	defw	rvmsgu		; 58	03ah	0bah
+	defw	login		; 60	03ch	0bch
+	defw	logoff		; 62	03eh	0beh
+	defw	stsf		; 64	040h	0c0h
+	defw	stsn		; 66	042h	0c2h
+	defw	0		; 68	044h	0c4h - to be removed
+	defw	ckstdp		;	046h	0c6h
+	defw	chkmsc		;	048h	0c8h
+
+; hi bit is "end" signal, else keep executing routines in list...
+; byte & 07fh is index into FUNTB3, routine to call.
+funtb2:
+	defb	080h		; - never called
+fgtvr	equ	$-funtb2
+	defb	0AEh		;
+frssy	equ	$-funtb2
+	defb	0B2h		;
+frsvc	equ	$-funtb2
+	defb	096h		;
+fsldk	equ	$-funtb2
+	defb	0AAh		;
+fopfi	equ	$-funtb2
+	defb	008h, 00Eh, 018h, 09Ah	;
+fdlfi	equ	$-funtb2
+	defb	006h, 098h	;
+fsrfs	equ	$-funtb2
+	defb	040h, 018h, 0A0h	;
+fsrnx	equ	$-funtb2
+	defb	042h, 018h, 0A0h	;
+frdsq	equ	$-funtb2
+	defb	048h, 006h, 018h, 01Ch, 0A2h	; READ SEQ
+fwrsq	equ	$-funtb2
+	defb	048h, 008h, 010h, 018h, 09Ch	; WRITE SEQ
+frefi	equ	$-funtb2
+	defb	008h, 00Ah, 002h, 098h	;
+flgvc	equ	$-funtb2
+	defb	0A6h		;
+fgtal	equ	$-funtb2
+	defb	012h, 002h, 018h, 0A4h	;
+fwrpr	equ	$-funtb2
+	defb	012h, 002h, 098h	;
+fstfi	equ	$-funtb2
+	defb	006h, 018h, 09Ch	;
+frdrr	equ	$-funtb2
+	defb	048h, 006h, 018h, 01Eh, 0A2h	; READ RAND
+fwrrr	equ	$-funtb2
+	defb	048h, 008h, 010h, 018h, 09Eh	; WRITE RAND [ZEROFIL]
+fgtsz	equ	$-funtb2
+	defb	006h, 018h, 09Eh	;
+flkrc	equ	$-funtb2
+	defb	008h, 00Ch, 018h, 09Eh	;
+fstpw	equ	$-funtb2
+	defb	094h		;
+flgin	equ	$-funtb2
+	defb	03Ch, 098h	;
+flgof	equ	$-funtb2
+	defb	03Eh, 098h	;
+fsdnw	equ	$-funtb2
+	defb	0B8h		;
+frvnw	equ	$-funtb2
+	defb	0BAh		;
+fnwst	equ	$-funtb2
+	defb	0B4h		;
+fnwcf	equ	$-funtb2
+	defb	0B6h		;
+fstcp	equ	$-funtb2	; ***** DUPLICATE of fstpw *****
+	defb	094h		;
+fsvcf	equ	$-funtb2
+	defb	03Eh, 018h, 0A4h	;
+fgtdl	equ	$-funtb2
+	defb	046h, 098h	;
+fdkms	equ	$-funtb2
+	defb	046h, 002h, 018h, 0A4h	;
+flst1	equ	$-funtb2
+	defb	0A8h
+flstbk	equ	$-funtb2
+	defb	0ACh
+
+; table of message handlers? per BDOS func?
+; -1 = ERROR, 0 = PASSTHRU, else index into FUNTB2
+funtb1:
+	defb	0		; 0 -
+	defb	0		; 1 -
+	defb	0		; 2 -
+	defb	0		; 3 -
+	defb	0		; 4 -
+	defb	flst1		; 5 -
+	defb	0		; 6 -
+	defb	0		; 7 -
+	defb	0		; 8 -
+	defb	0		; 9 -
+	defb	0		; 10 -
+	defb	0		; 11 -
+	defb	fgtvr		; 12 - GET VERSION
+	defb	frssy		; 13 - RESET DISK SYSTEM
+	defb	fsldk		; 14 - SELECT DISK
+	defb	fopfi		; 15 - OPEN FILE
+	defb	fopfi		; 16 - CLOSE FILE
+	defb	fsrfs		; 17 - SEARCH FIRST
+	defb	fsrnx		; 18 - SEARCH NEXT
+	defb	fdlfi		; 19 - DELETE FILE
+	defb	frdsq		; 20 - READ SEQUENTIAL
+	defb	fwrsq		; 21 - WRITE SEQUENTIAL
+	defb	fopfi		; 22 - MAKE FILE
+	defb	frefi		; 23 - RENAME FILE
+	defb	flgvc		; 24 - GET LOGIN VECTOR
+	defb	0		; 25 - GET CURRENT DISK
+	defb	0		; 26 - SET DMA ADDR
+	defb	fgtal		; 27 - GET ALLOC ADDR
+	defb	fwrpr		; 28 - WRITE PROTECT DISK
+	defb	flgvc		; 29 - GET R/O VECTOR
+	defb	fstfi		; 30 - SET FILE ATTR
+	defb	fgtal		; 31 - GET DPB ADDR
+	defb	0		; 32 - GET/SET USER CODE
+	defb	frdrr		; 33 - READ RANDOM
+	defb	fwrrr		; 34 - WRITE RANDOM
+	defb	fgtsz		; 35 - GET FILE SIZE
+	defb	fgtsz		; 36 - SET RAND RECORD
+	defb	frsvc		; 37 - RESET DRIVE
+	defb	frsvc		; 38 - ACCESS DRIVE
+	defb	frsvc		; 39 - FREE DRIVE
+	defb	fwrrr		; 40 - WRITE RAND ZERO FILL
+	defb	0		; 41 - TEST & WRITE RECORD
+	defb	flkrc		; 42 - LOCK RECORD
+	defb	flkrc		; 43 - UNLOCK RECORD
+	defb	0		; 44 - SET MULTISECTOR COUNT
+	defb	0		; 45 - SET BDOS ERR MODE
+	defb	fdkms		; 46 - GET DISK FREE SPACE
+	defb	0		; 47 - CHAIN TO PROGRAM (***? can't chain to remote program)
+	defb	fstcp		; 48 - FLUSH BUFFERS
+	defb	0		; 49 - GET/SET SCB
+	; 50..63 - handled by special case
+nftb1	equ	$-funtb1
+
+	; if any are passed to server, must preserve FUNCOD as real code
+funtbx:
+	defb	fstcp		; 98 - FREE BLOCKS
+	defb	fopfi		; 99 - TRUNCATE FILE
+	defb	0		; 100 - SET DIR LABEL ****support?****
+	defb	fgtdl		; 101 - GET DIR LABEL BYTE
+	defb	fgtdl		; 102 - READ FILE DATE-PWD MODE
+	defb	0		; 103 - WRITE FILE XFCB ****support?****
+	defb	0		; 104 - SET DATE & TIME
+	defb	0		; 105 - GET DATE & TIME - can't support here, use SEND NW MESG
+	defb	fstpw		; 106 - SET DEF PASSWORD
+	defb	0		; 107 - GET SERIAL NUMBER
+	defb	0		; 108 - GET/SET PGM RET CODE
+	defb	0		; 109 - GET/SET CONS MODE
+	defb	0		; 110 - GET/SET OUT DELIM
+	defb	0		; 111 - PRINT BLOCK
+	defb	flstbk		; 112 - LIST BLOCK
+nftbx	equ	$-funtbx
+
+	; CP/Net functions, not known to BDOS
+funtbn:
+	defb	flgin		; 64 - LOGIN
+	defb	flgof		; 65 - LOGOFF
+	defb	fsdnw		; 66 - SEND NW MESG
+	defb	frvnw		; 67 - RECV NW MESG
+	defb	fnwst		; 68 - GET NW STATUS
+	defb	fnwcf		; 69 - GET NW CFG
+	defb	fstcp		; 70 - SET COMP ATTR
+	defb	fsvcf		; 71 - GET SERVER CFG
+nftbn	equ	$-funtbn
+
+funtbs:
+	defb	0,nftb1
+	defw	funtb1
+	defb	cnmin,nftbn
+	defw	funtbn
+	defb	cxmin,nftbx
+	defw	funtbx
+	defw	0
+
+sndhdr:
+	ld	hl,msgtop
+	ld	(hl),0		; FMT = CP/Net
+	inc	hl
+	; DID (server ID) already set
+	inc	hl
+	; SID, our node ID, will be set by SNIOS
+	inc	hl
+	inc	hl
+	inc	hl
+	ex	de,hl		; DE = MSGDAT
+	ld	hl,(mcrpnt)
+	xor	a		; negate DE
+	sub	e
+	ld	c,a
+	ld	a,0
+	sbc	a,d
+	ld	b,a
+	add	hl,bc		; HL -= DE
+	ld	a,l
+	or	h
+	jp	z,sndhd1	; size set already
+	dec	hl
+	ex	de,hl
+	dec	hl
+	ld	(hl),e		; SIZ = length - 1
+sndhd1:
+	ld	bc,msgtop
+sdmsge:
+	call	sndmsg
+	inc	a
+	ret	nz
+	jp	nerror
+
+rvmsge:
+	call	rcvmsg
+	inc	a
+	ret	nz
+nerror:
+	ld	hl,-1
+	ld	a,h
+	jp	ndend
+
+ndendr:
+	ld	a,(retcod)
+ndend:
+	ex	de,hl
+	ld	hl,(ustack)
+	ld	sp,hl
+	ex	de,hl
+	ld	l,a
+	ld	b,h
+	ret
+
+rcvpar:
+	ld	bc,msgtop
+	call	rvmsge
+	ld	hl,msgdat
+	ld	(mcrpnt),hl
+	ret
+
+tnextp:				; abandon call to real BDOS
+	ld	hl,(ustack)
+	ld	sp,hl
+tbdosp:
+	ld	hl,(paramt)
+	ex	de,hl
+	ld	a,(funcod)
+	ld	c,a
+	jp	next
+
+ckfcbd:
+	ld	hl,(paramt)
+	ld	a,(hl)
+	dec	a
+	jp	p,ckfcb1
+	call	curdsk
+ckfcb1:
+	ld	e,a
+	ld	d,0
+	call	chkdsk
+	cp	0FFh
+	ret	nz
+	call	tbdosp
+	jp	ndend
+
+chkdsk:
+	ld	hl,cfgtbl+bsdsks
+	add	hl,de
+	add	hl,de
+	ld	a,(hl)
+	rla
+	jp	c,chkds1	; remote disk
+	ld	a,0FFh
+	ret
+chkds1:
+	rra
+	and	00Fh		; remote server disk number
+	inc	a
+	ld	c,a
+	inc	hl
+	ld	a,(hl)		; remote server node ID
+	ld	(msgid),a
+	ret
+
+sndfcb:
+	call	cksfcb
+	jp	sndhdr
+
+cksfcb:
+	call	ckfcbd		; check FCB disk for local/remote (local does not return)
+stfcb:
+	call	curusr
+	ld	hl,(mcrpnt)
+	ld	(hl),a		; put USR in msg buf
+	inc	hl
+	ld	(hl),c		; put DSK in msg buf
+	inc	hl
+	ex	de,hl
+	ld	hl,(paramt)
+	inc	hl
+	ex	de,hl
+	ld	b,35
+	call	mcpyts		; copy FCB to msg buf
+	xor	a
+	ld	(fntmpf),a
+	ld	(f5setf),a
+	ld	hl,(mcrpnt)
+	ld	de,-35
+	add	hl,de		; point to start of FCB name in msg buf
+subtmp:
+	call	ckdol		; substitute $NN for $$$ at start of name
+	ld	b,0
+	add	hl,bc		; skip rest of 3 chars
+	inc	hl
+	ld	a,(hl)
+	and	080h		; check f5' attr - partial close/delete XFCBs only
+	inc	hl
+	jp	z,subtm1
+	ld	a,(hl)
+	and	080h		; check f6' attr - assign passwd/set byte count
+	jp	nz,subtm1
+	dec	a
+	ld	(f5setf),a
+subtm1:
+	ld	a,(fntmpf)
+	add	a,a
+	ld	(fntmpf),a
+	inc	hl
+	inc	hl
+	inc	hl
+ckdol:
+	ld	c,3
+	ld	a,'$'
+ckdol1:
+	cp	(hl)
+	ret	nz
+	inc	hl
+	dec	c
+	jp	nz,ckdol1
+	ex	de,hl
+	ld	hl,fntmpf
+	inc	(hl)
+	dec	de
+	ld	a,(cfgtbl+bsrid)	; client (slave) ID
+	ld	b,a
+	call	hexdig
+	dec	de
+	ld	a,b
+	rra
+	rra
+	rra
+	rra
+	call	hexdig
+	inc	de
+	inc	de
+	ex	de,hl
+	ret
+
+hexdig:
+	and	00Fh
+	cp	10
+	jp	nc,hexdg1
+	add	a,'0'
+	ld	(de),a
+	ret
+hexdg1:
+	add	a,'A'-10
+	ld	(de),a
+	ret
+
+rentmp:
+	ld	hl,(mcrpnt)
+	ld	de,-19
+	add	hl,de
+	jp	subtmp
+
+mcpyts:
+	ld	a,(de)
+	ld	(hl),a
+	inc	hl
+	inc	de
+	dec	b
+	jp	nz,mcpyts
+	ld	(mcrpnt),hl
+	ret
+
+wtdtc2:
+	ld	b,2
+	jp	wtdtcs
+wtdtc8:
+	ld	b,8
+	jp	wtdtcs
+
+wtdtcp:
+	ld	b,sctlng
+wtdtcs:
+	ld	hl,(dmaadr)
+	ex	de,hl
+	ld	hl,(mcrpnt)
+	call	mcpyts
+	jp	sndhdr
+
+ckstdp:
+	ld	a,(paramt)
+	jp	stdsk0
+ckstdk:
+	call	curdsk
+stdsk0:
+	ld	e,a
+	ld	d,000h
+	call	chkdsk
+	cp	0FFh
+	jp	nz,stdsk1
+	call	tbdosp
+	jp	ndend
+
+stdsk1:
+	ld	(msgid),a
+	ld	hl,(mcrpnt)
+	dec	c
+	ld	(hl),c
+	inc	hl
+	ld	(mcrpnt),hl
+	ret
+
+; Handle multi-sector count
+chkmsc:
+	call	ckfcbd		; does not return if disk is local
+	; From here on, we know the disk is remote
+	call	sysmsc
+	cp	1
+	; skip multi-sector handling if count == 1
+	ret	z		; returns to NDOSE5, goto next opcode.
+	ld	(curmsc),a
+	pop	hl		; NDOSE5 ret addr
+	ld	(mscret),hl
+	pop	hl		; FUNTB2 pointer (past CHKMSC)
+	ld	(msctbp),hl
+	ld	a,(funcod)
+	cp	crread
+	jp	c,ckmsc2
+	; save rand rec position
+	ld	hl,(paramt)	; FCB
+	ld	bc,fcbrr0
+	add	hl,bc
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	inc	hl
+	ld	a,(hl)
+	ld	(savrr+2),a
+	ex	de,hl
+	ld	(savrr),hl
+	jp	ckmsc2
+ckmsc0:
+	ld	a,(retcod)
+	or	a
+	jp	nz,ckmsc1
+	ld	a,(curmsc)
+	dec	a
+	ld	(curmsc),a
+	jp	z,ckmsc1
+	ld	hl,msgdat
+	ld	(mcrpnt),hl
+	ld	hl,(dmaadr)
+	ld	bc,128
+	add	hl,bc
+	ld	(dmaadr),hl
+	ld	a,(funcod)
+	cp	crread
+	jp	c,ckmsc2
+	; advance random record number...
+	ld	hl,(paramt)	; FCB
+	ld	bc,fcbrr0
+	add	hl,bc
+	inc	(hl)
+	jp	nz,ckmsc2
+	inc	hl
+	inc	(hl)
+	jp	nz,ckmsc2
+	inc	hl
+	inc	(hl)
+ckmsc2:
+	ld	hl,ckmsc0
+	push	hl
+	ld	hl,(msctbp)
+	push	hl
+	ld	hl,(mscret)
+	jp	(hl)		; jmp NDOSE5 - do next opcode. Returns to CKMSC0 when done.
+
+; done with multi-sec read/write, restore everything.
+ckmsc1:				; could be EOF, or some physical error
+	ld	a,(funcod)
+	cp	crread
+	jp	c,ckmsc3
+	; restore file position...
+	ld	a,(savrr+2)
+	ld	hl,(savrr)
+	ex	de,hl
+	ld	hl,(paramt)	; FCB
+	ld	bc,fcbrr0
+	add	hl,bc
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+	inc	hl
+	ld	(hl),a
+	; If the program's next op is random read/write, then we are
+	; finished now. But, if the next op is sequential then
+	; we must set the file position back to where it started.
+	; Use READ RAND to set file position. Response is ignored.
+	ld	a,crread
+	ld	(msgfun),a
+	ld	hl,msgdat
+	ld	(mcrpnt),hl
+	call	sndfcb
+	call	rcvpar
+	; ignore data/error returned by CRREAD
+ckmsc3:
+	ld	a,(curmsc)	; if error ended us early, need num sec completed.
+	ld	e,a		; save where SYSMSC won't destroy it
+	call	sysmsc
+	sub	e
+	ld	h,a
+	ret			; NDENDR
+
+
+bcstfn:				; broadcast func (set default password, set compat attrs)
+	ld	de,0
+	call	forall
+	ld	a,c
+	inc	c
+	jp	z,rstall	; no (more) servers, reset and return
+	ld	(msgid),a
+	ld	hl,(paramt)
+	ex	de,hl
+	ld	hl,(mcrpnt)
+	ld	a,(funcod)
+	cp	cdefpw-cbmax	; a.k.a. 106 - set def password
+	jp	z,bcst1
+	; fn 70 - set compat attr
+	ld	(hl),e
+	jp	bcst2
+bcst1:
+	ld	b,8
+	call	mcpyts
+bcst2:
+	call	sndhdr
+	call	rcvpar
+	jp	bcstfn
+
+bcstvc:				; broadcast "drive vector" funcs to all servers
+	ld	hl,(paramt)
+	ex	de,hl
+bcstv1:
+	call	forall
+	push	hl
+	ld	a,c
+	inc	c
+	jp	nz,bcstv2	; some remote drives to do
+	call	rstall
+	pop	de
+	ld	a,(funcod)
+	cp	crsdsn		; reset drive
+	ret	nz		; only reset drive is passed to local
+	ld	c,a
+	call	next
+	ld	(retcod),a
+	ret
+bcstv2:
+	ld	(msgid),a
+	ld	hl,msgdat
+	ld	(hl),e
+	inc	hl
+	ld	(hl),d
+	inc	hl
+	ld	(mcrpnt),hl
+	call	sndhdr
+	ld	a,(funcod)
+	sub	38		; access drive
+	jp	z,bcstv3
+	push	af
+	call	rcvpar
+	pop	af
+	pop	de
+	dec	a
+	jp	z,bcstv1
+	ld	a,(msgdat)
+	ld	(retcod),a
+	inc	a
+	jp	z,rstall
+	jp	bcstv1
+
+bcstv3:
+	call	rcvec
+	pop	de
+	jp	bcstv1
+
+; Returns vector of all disks for given server,
+; each call skips servers already reported.
+forall:
+	ld	hl,cfgtbl+bsdsks
+	push	de
+	ld	de,0
+	ld	bc,010FFh
+foral1:
+	ld	a,(hl)
+	rla
+	jp	nc,foral6	; local
+	rla
+	jp	c,foral6	; "already did" flag
+	inc	hl
+	ld	a,c
+	cp	0FFh
+	jp	z,foral2
+	cp	(hl)
+	jp	z,foral3
+	dec	hl
+	jp	foral6
+foral2:
+	ld	c,(hl)
+foral3:
+	dec	hl
+	ld	a,(hl)
+	or	040h		; mark this one done...
+	ld	(hl),a
+	ex	(sp),hl
+	call	rhlr0
+	jp	nc,foral7
+	ex	(sp),hl
+	ld	a,(hl)
+	and	00Fh
+	inc	a
+	push	hl
+	ld	hl,1
+foral4:
+	dec	a
+	jp	z,foral5
+	add	hl,hl
+	jp	foral4
+foral5:
+	ld	a,e
+	or	l
+	ld	e,a
+	ld	a,d
+	or	h
+	ld	d,a
+	pop	hl
+	jp	foral8
+foral6:
+	ex	(sp),hl
+	call	rhlr0
+	jp	nc,foral7
+	ld	a,h
+	or	080h
+	ld	h,a
+foral7:
+	ex	(sp),hl
+foral8:
+	inc	hl
+	inc	hl
+	dec	b
+	jp	nz,foral1
+	pop	hl
+	ret
+
+rhlr0:
+	or	a
+	ld	a,h
+	rra
+	ld	h,a
+	ld	a,l
+	rra
+	ld	l,a
+	ret
+
+; Reset from FORALL
+rstall:
+	ld	hl,cfgtbl+bsdsks
+	ld	b,16
+rstal1:
+	ld	a,(hl)
+	and	08Fh		; clear FORALL iterator flag(s)
+	ld	(hl),a
+	inc	hl
+	inc	hl
+	dec	b
+	jp	nz,rstal1
+	ret
+
+stsf:				; setup Search First
+	ld	a,0FFh
+	ld	(cursid),a	; assume local
+	ld	hl,(paramt)
+	ld	a,(hl)
+	cp	'?'
+	jp	nz,stsf1
+	call	ckstdk
+	ld	c,'?'+080h	; "drive" code with CP/M3 flag
+	call	stfcb
+	jp	stsf2
+stsf1:
+	ld	hl,(mcrpnt)
+	inc	hl
+	ld	(mcrpnt),hl
+	call	cksfcb		; if remote, set FCB in msg
+stsf2:
+	ld	a,(msgid)
+	ld	(cursid),a
+	call	setsra
+	jp	sndhdr
+
+stsn:				; setup Search Next
+	ld	a,(cursid)
+	cp	0FFh		; was Search First a local op?
+	jp	nz,stsn1
+	call	tbdosp
+	jp	ndend
+stsn1:
+	ld	(msgid),a
+	call	curusr
+	ld	hl,(mcrpnt)
+	inc	hl
+	ld	(hl),a
+	inc	hl
+	ld	(mcrpnt),hl
+	jp	sndhdr
+
+rcvec:
+	call	rcvpar
+	ld	hl,msgdat+1
+	ld	(mcrpnt),hl
+	ld	d,(hl)		; D = ext err code
+	dec	hl
+	ld	a,(hl)
+	ld	(retcod),a
+	dec	hl
+	ld	a,(hl)		; SIZ
+	dec	a
+	ld	h,0		; ensure H=0 to avoid confusion with extended errors
+	ret	nz		; not extended error - skip rest
+	call	bdermd
+	inc	a
+	jp	nz,nderr
+	ex	de,hl
+	jp	ndendr
+
+nderr:
+	push	de
+	ld	de,nderrm
+	call	prmsg
+	pop	af		; A = (D), ext err code
+	push	af		; Fix bug in NDOS.ASM
+	call	hexout
+	ld	de,nderr2
+	call	prmsg
+	ld	a,(funcod)
+	call	hexout
+	call	bdermd
+	pop	hl		; H = ext err code
+	cp	0FEh
+	jp	z,ndendr
+	jp	top		; abort program
+
+hexout:
+	ld	de,hexmsg+1	; do low nibble first
+	push	af
+	call	hexdig
+	pop	af
+	rra
+	rra
+	rra
+	rra
+	dec	de		; back to hi nibble
+	call	hexdig
+prmsg:
+	ld	c,cbufpr
+	jp	next
+
+gtfcb:
+	ld	a,(f5setf)
+	inc	a
+	jp	nz,gtfccr
+gtfcrr:
+	ld	b,35		; FCB+CR+RR (-drive)
+	jp	gtfc1
+gtfccr:
+	ld	b,32		; FCB+CR, not RR
+gtfc1:
+	call	rstmp		; un-do temp file subst
+	ld	hl,(mcrpnt)
+	inc	hl
+	ex	de,hl
+	ld	hl,(paramt)
+	inc	hl
+	call	mcpyfs
+	ld	h,0		; ensure H=0 to avoid confusion with extended errors
+	ret
+
+mcpyfs:
+	ld	a,(de)
+	ld	(hl),a
+	inc	de
+	inc	hl
+	dec	b
+	jp	nz,mcpyfs
+	ex	de,hl
+	ld	(mcrpnt),hl
+	ret
+
+rstmp:				; restore TMP filename
+	ld	a,(fntmpf)
+	rra
+	rra
+	jp	nc,rstmp1
+	ld	hl,(mcrpnt)
+	inc	hl
+	inc	hl
+	ld	(hl),'$'
+	inc	hl
+	ld	(hl),'$'
+rstmp1:
+	rla
+	ret	nc
+	ld	hl,(mcrpnt)
+	ld	de,10
+	add	hl,de
+	ld	(hl),'$'
+	inc	hl
+	ld	(hl),'$'
+	ret
+
+gtdire:
+	ld	a,(retcod)
+	inc	a
+	ld	h,0		; ensure H=0 to avoid confusion with extended errors
+	ret	z
+	ld	hl,(mcrpnt)
+	; Special case for CP/M3 full search, although really
+	; any SEARCH that wants to be fully compatible with CP/M
+	; neuances - specifically that the DMA buffer contains the
+	; full directory sector after a search.
+	;
+	; CP/Net breaks SEARCH funcs 17/18 by only returning
+	; one DIRENT at a time, while the local BDOS calls
+	; actually fill the DMA buffer with the directory sector.
+	; DIR.COM depends on this for getting timestamps.
+	ld	a,(msgsiz)
+	or	a		; 00 = 1 byte, dir code only, DMA buf implied
+	ret	z		; NDENDR will return dir code to user
+	cp	32+4		; anything 1 < x < 128 really, pick a number (expect 32).
+	jp	nc,stosc0	; assume 128 bytes, copy all to DMA buffer.
+	; single DIRENT returned, copy to correct location.
+	ex	de,hl
+	ld	hl,(dmaadr)
+	ld	a,(retcod)
+	inc	a
+	ld	bc,32
+gtdir1:
+	dec	a
+	jp	z,gtdir2
+	add	hl,bc
+	jp	gtdir1
+gtdir2:
+	ld	b,c
+	call	mcpyfs
+	ret
+
+gtosct:
+	ld	a,(retcod)
+	or	a
+	ret	nz
+	ld	hl,msgdat+37
+stosc0:
+	ex	de,hl
+	ld	hl,(dmaadr)
+	ld	b,sctlng
+	call	mcpyfs
+	ld	h,0		; ensure H=0 to avoid confusion with extended errors
+	ret
+
+gtmisc:
+	ld	hl,(mcrpnt)
+	dec	hl		; drop error byte
+	ld	a,(funcod)
+	cp	cgtall		; get alloc addr
+	jp	z,gtmsc3	; for alloc vec, just leave in message buffer
+	ex	de,hl
+	cp	cfrsp		; get disk free space
+	jp	z,gtmsc4
+	cp	cgtdpb		; get DPB addr
+	jp	nz,gtmsc1
+	; fn 31 - get DPB
+	ld	hl,curdpb
+	push	hl
+	ld	b,16		; should be 15 for CP/M 2.2, 17 for CP/M 3
+	jp	gtmsc2
+gtmsc4:
+	ld	hl,0
+	push	hl
+	ld	hl,(dmaadr)
+	ld	b,3
+	jp	gtmsc2
+
+gtmsc1:				; fn 71 - get server config
+	ld	hl,curscf
+	push	hl
+	ld	b,23
+gtmsc2:
+	call	mcpyfs
+	pop	hl
+gtmsc3:
+	ld	a,l
+	ld	(retcod),a
+	ret
+
+gtlogv:
+	ld	de,cfgtbl+bsdske
+	ld	hl,0
+	ld	b,16
+gtlgv1:
+	ld	a,(de)
+	dec	de
+	ld	c,a
+	ld	a,(de)
+	dec	de
+	add	hl,hl
+	call	drvsts
+	dec	b
+	jp	nz,gtlgv1
+	ld	a,l
+	ld	(retcod),a
+	ret
+
+; Get a drive's status (i.e. GET LOGIN VECTOR)
+; B = local drive num
+; A = net cfg byte, bit-7 = remote, bit-0:3 = remote drive num
+; Returns DE bit-0 = drive's status
+drvsts:
+	push	de
+	push	bc
+	push	hl
+	rla
+	jp	c,drvst1
+	; drive is local
+	push	bc
+	call	tbdosp
+	pop	bc
+	dec	b
+	ex	de,hl
+	jp	drvst2
+
+drvst1:				; drive is remote
+	rra
+	and	00Fh
+	ld	b,a		; remote drive number
+	ld	a,c		; server ID
+	ld	(msgid),a
+	ld	hl,msgdat
+	ld	(mcrpnt),hl
+	push	bc
+	call	sndhdr
+	call	rcvpar
+	pop	bc
+	ld	hl,(mcrpnt)
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+drvst2:				; DE = vector of active drives
+	ld	a,b
+	or	a
+	jp	z,drvst4
+drvst3:				; get drive 'B' bit to LSB
+	ld	a,d
+	rra
+	ld	d,a
+	ld	a,e
+	rra
+	ld	e,a
+	dec	b
+	jp	nz,drvst3
+drvst4:
+	ld	d,000h
+	ld	a,e
+	and	001h
+	ld	e,a
+	pop	hl
+	add	hl,de
+	pop	bc
+	pop	de
+	ret
+
+seldsk:
+	ld	a,(paramt)
+	ld	d,000h
+	ld	e,a
+	call	chkdsk
+	cp	0FFh		; local disk
+	jp	z,tbdosp	; let BDOS handle
+	call	setdsk
+	ld	hl,(mcrpnt)
+	dec	c
+	ld	(hl),c
+	inc	hl
+	ld	(mcrpnt),hl
+	call	sndhdr
+	jp	rcvec
+
+reset:				; anything to do? BDOS will be called... but BDOS does not call 0005 (us)?
+	ld	hl,msgdat
+	ld	(mcrpnt),hl
+	; A: cannot be remote...
+	jp	next
+
+list1:
+	ld	de,paramt
+	ld	bc,1
+	jp	lstbk2
+
+lstblk:
+	ld	hl,(paramt)
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)		; address of data
+	inc	hl
+	ld	c,(hl)
+	inc	hl
+	ld	b,(hl)		; length
+	ld	a,c
+	or	b
+	ret	z
+lstbk2:
+	ld	ix,cfgtbl+bslist
+	bit	7,(ix+0)
+	jp	z,tnextp
+	ld	hl,cfgtbl+bslist+9
+	push	de
+	ld	e,(ix+7)
+	ld	d,0
+	add	hl,de
+	pop	de
+lstbk0:
+	ld	a,(de)
+	inc	de
+	ld	(hl),a
+	inc	hl
+	inc	(ix+7)		; dirty == not-zero
+	jp	m,lstbk3	; send data
+	cp	0FFh		; stop at 0ffh? or need to continue if more?
+	jp	z,lstbk3	; this will continue if more chars exist...
+lstbk1:
+	dec	bc
+	ld	a,b
+	or	c
+	jp	nz,lstbk0
+	ret
+
+lstbk3:				; must send buffer
+	ld	a,(ix+0)
+	and	0Fh
+	ld	(ix+8),a
+				; SIZ already len-1, incl LST unit
+	ld	a,(ix+1)	; LST server
+	ld	(ix+4),a	; DID
+	push	de
+	push	bc
+	push	ix
+	ld	bc,cfgtbl+bslist+3	; MSG buffer
+	call	sndmsg
+	pop	ix
+	push	ix
+	ld	(ix+7),0	; clear dirty flag, setup for next char
+	inc	a
+	jp	z,nerror
+	ld	bc,msgtop
+	call	rvmsge
+	pop	ix
+	pop	bc
+	pop	de
+	ld	hl,cfgtbl+bslist+9
+	jp	lstbk1
+
+getver:
+	ld	hl,(scbadr)
+	ld	l,scbase+05h
+	ld	l,(hl)
+	ld	h,002h
+	ld	a,l
+	ld	(retcod),a
+	ret
+
+nwstat:
+	call	ntwkst
+	ld	(retcod),a
+	ret
+
+nwcftb:
+	call	cnftbl
+	ld	a,l
+	ld	(retcod),a
+	ret
+
+login:
+	ld	hl,(paramt)
+	ld	a,(hl)
+	ld	(msgid),a
+	inc	hl
+	ex	de,hl
+	ld	hl,(mcrpnt)
+	ld	b,8
+	call	mcpyts
+	jp	sndhdr
+
+logoff:
+	ld	a,(paramt)
+	ld	(msgid),a
+	jp	sndhdr
+
+sdmsgu:
+	ld	hl,(paramt)
+	ld	b,h
+	ld	c,l
+	call	sndmsg
+	ld	(retcod),a
+	ret
+
+rvmsgu:
+	ld	hl,(paramt)
+	ld	b,h
+	ld	c,l
+	call	rcvmsg
+	ld	(retcod),a
+	ret
+
+lderr:
+	ld	a,-1
+	pop	hl
+	ret
+
+savdma:	defw	0
+savrr:	defb	0,0,0
+mscret:	defw	0
+msctbp:	defw	0
+curmsc:	defb	0
+dmaadr:	defw	0
+
+curdpb:	defs	15
+curscf:	defs	23
+
+; this is used to do warm boot initialization, since most
+; programs do not call BDOS Function 0 but instead just
+; JMP 0. The CCP then makes this call, either upon startup
+; and/or immediately prior to running a program.
+; Perportedly, the CPP calls this with DE=NULL in order
+; to scrub RSXs on warm boot.
+ldovly:
+warmst:
+	push	de
+	push	bc
+	call	ntwkbt
+	; TODO: any other re-init? reset some context?
+;	lxi	d,wbmsg
+;	mvi	c,CBUFPR
+;	call	next
+	pop	bc
+	pop	de
+	jp	next
+
+; An example of how to process BDOS Func 60 RSX Func 113
+; and remove one's self.
+calrsx:
+	ld	l,e
+	ld	h,d
+	ld	a,(hl)
+	inc	hl
+	cp	113		; Check for RSX Func 113
+	jp	nz,next
+	ld	a,(hl)
+	inc	hl
+	cp	1		; Check param count to be sure
+	jp	nz,next
+	push	de
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	ld	hl,rsxnam
+	ld	b,8
+rsxf0:				; Compare paramter to our name
+	ld	a,(de)
+	cp	(hl)
+	jp	nz,rsxf1
+	inc	de
+	inc	hl
+	dec	b
+	jp	nz,rsxf0
+rsxf1:
+	pop	de
+	jp	nz,next
+	ld	de,cstdn
+	ld	c,cbufpr
+	call	next
+	ld	hl,next
+	ld	(start+1),hl	; only until remove takes place...
+	ld	a,0FFh
+	ld	(remove),a
+	ld	hl,0
+	ld	a,l
+	ret
+
+	end
+	

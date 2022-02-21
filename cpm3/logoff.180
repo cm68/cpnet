@@ -1,0 +1,144 @@
+	.Z80	; Accept Z80 instruction format
+	title	'LOGOFF Transient Program'
+
+;***************************************************************
+;***************************************************************
+;**                                                           **
+;**      L O G O F F   T r a n s i e n t   P r o g r a m      **
+;**                                                           **
+;***************************************************************
+;***************************************************************
+
+;
+; Equates
+;
+bdos	equ	0005h
+buff	equ	0080h
+
+print	equ	9
+version	equ	12
+logoff	equ	65
+cfgtbl	equ	69
+
+active	equ	00010000b
+
+start:
+	ld	hl,0
+	add	hl,sp
+	ld	sp,ccpstack+2
+	push	hl		; save CCP stack pointer
+	ld	c,version
+	call	bdos		; get version number
+	ld	a,h
+	and	00000010b
+	jp	z,versionerr	; CP/Net must be loaded
+	ld	e,0		; default Mstr ID = 00h
+	ld	hl,buff
+	ld	a,(hl)		; get # chars in the command tail
+	or	a
+	jp	z,dologoff	; default logoff if empty command tail
+	ld	c,a		; A = # chars in command tail
+	xor	a
+scanblnks:
+
+	inc	hl
+	ld	a,(hl)
+	cp	' '
+	jp	nz,pastblnks	; skip leading blanks
+	dec	c
+	jp	nz,scanblnks
+	jp	dologoff
+pastblnks:
+
+	cp	'['
+	jp	nz,logofferr
+scanmstrid:
+
+	inc	hl
+	dec	c
+	jp	z,logofferr
+	ld	a,(hl)
+	cp	']'
+	jp	z,dologoff
+	sub	'0'
+	cp	10
+	jp	c,updateid
+	add	a,0+('0'-'A'+10) and 0FFh
+	cp	16
+	jp	nc,logofferr
+updateid:
+
+	push	af
+	ld	a,e
+	add	a,a
+	add	a,a
+	add	a,a
+	add	a,a
+	ld	e,a		; accum * 16
+	pop	af
+	add	a,e
+	ld	e,a
+	jp	scanmstrid
+
+dologoff:
+
+	ld	c,logoff
+	call	bdos
+	inc	a
+	jp	nz,logoffok
+	ld	de,logoffailedmsg
+	jp	printmsg
+
+versionerr:
+
+	ld	de,versionerrmsg
+	jp	printmsg
+
+logofferr:
+
+	ld	de,logofferrmsg
+printmsg:
+
+	ld	c,print
+	call	bdos
+	jp	exit
+
+logoffok:
+
+	ld	c,cfgtbl
+	call	bdos		; get config table address
+	ld	a,(hl)
+	and	not active	; turn off active bit
+	ld	(hl),a
+exit:
+	pop	hl
+	ld	sp,hl		; restore CCP stack pointer
+	ret
+
+;
+; Local Data Segment
+;
+versionerrmsg:
+
+	defb	'CP/Net is not loaded.'
+	defb	'$'
+
+logofferrmsg:
+
+	defb	'Illegal LOGOFF command.'
+	defb	'$'
+
+logoffailedmsg:
+
+	defb	'LOGOFF failed.'
+	defb	'$'
+
+lclstack:
+
+	defw	0C7C7h,0C7C7h,0C7C7h,0C7C7h,0C7C7h
+	defw	0C7C7h,0C7C7h,0C7C7h,0C7C7h,0C7C7h
+ccpstack:
+
+	defw	$-$
+
+	end	start

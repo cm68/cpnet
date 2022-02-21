@@ -1,0 +1,93 @@
+DODEBUG	equ	0
+DEBUGS	equ	0
+
+zbase	equ	040h		; z180 cpu i/o base address
+mk4base	equ	080h		; mark IV i/o base address
+
+sr0ctla equ     zbase+0         ; ASCI 0 control register A
+sr0ctlb equ     zbase+2         ; ASCI 0 control register B
+sr0stat equ     zbase+4         ; ASCI 0 status register
+sr0tx   equ     zbase+6         ; ASCI 0 transmit data register
+sr0rx   equ     zbase+8         ; ASCI 0 receive data register
+
+sr1ctla equ     zbase+1		; ASCI 1 control register A
+sr1ctlb equ     zbase+3         ; ASCI 1 control register B
+sr1stat equ     zbase+5         ; ASCI 1 status register
+sr1tx   equ     zbase+7         ; ASCI 1 transmit data register
+sr1rx   equ     zbase+9         ; ASCI 1 receive data register
+sr1ec	equ	zbase+13h	; ASCI 1 extention register
+sr1blo	equ	zbase+1ch	; ASCI 1 time constant lo
+sr1bhi	equ	zbase+1dh	; ASCI 1 time constant hi
+
+sdopr   equ     mk4base+9       ; SD control port
+esprst  equ     00000001b       ; set to reset the esp-01
+
+; status register
+rxrdy   equ     10000000b       ; Rx data available     (RDRF)
+rxovr   equ     01000000b       ; Rx overrun            (OVRN)
+rxperr  equ     00100000b       ; Rx parity error       (PE)
+rxferr  equ     00010000b       ; Rx framing error      (FE)
+rxinte  equ     00001000b       ; Rx int enable         (RIE)
+dcd     equ     00000100b       ; DCD state             (DCD0)
+cts     equ     00000100b       ; CTS enable            (CTS1E)
+txrdy   equ     00000010b       ; Tx space available    (TDRE)
+txinte  equ     00000001b       ; Tx int enable         (TIE)
+
+; control register A
+txe	equ	00100000b	; tx enable
+rxe	equ	01000000b	; rx enable
+bits8	equ	00000100b	; 8 bits
+paryes	equ	00000010b	; enable parity
+stop2	equ	00000001b	; 2 stop bits
+
+; control register B
+ps30	equ	00100000b	; prescale 30, else 10
+dr64	equ	00001000b	; div 64, else 16
+ssext	equ	00000111b	; baud rate prescale factor
+				; all set = external, else 2^ss
+
+; AS extension register
+x1	equ	00010000b	; x1 else /16 or /64
+brg	equ	00001000b	; enable baud rate divisor regs
+
+CR	equ	00dh
+LF	equ	00ah
+DEL	equ	07fh
+SPACE	equ	020h
+BS	equ	008h
+ESC	equ	01bh
+
+	if	DODEBUG
+
+debug   macro   ch
+	local	nod
+        push    af
+	ld	a,(debugf)
+	bit	0,a
+	jr	z,nod
+
+	if	DEBUGS
+
+        ld      a,ch
+        call    dprint
+
+	else
+
+        push    bc
+        ld      a,ch
+        ld      bc,sr0tx
+        out     (c),a
+        pop	bc
+
+	endif
+
+nod:	pop     af
+
+        endm
+
+	else
+
+debug	macro	ch
+	endm
+
+	endif

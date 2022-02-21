@@ -1,0 +1,640 @@
+; SNIOS plug-in for Mark IV ASCI1 and ESP-01 boardlet
+;
+; written for the Z180, because we need to use the out0, in0 and tstio
+; instructions.
+; finally,
+; set baud rate
+;
+; 230400 baud is 28kB/sec, pretty slow for mass storage. think of it as half
+; a T1, or 4x isdn, or almost 10x analog modem, and it's better.
+; what this does do is give us a time budget of just over 30 Mikes per byte
+; however, the ASCI allows up to 512kb, which is 8 inch floppy speed.
+; that drops our time budget to 15 Mikes. tight-ish, certainly no longer
+; in bios interrupt driven land.
+;
+; the Z8S180-N has a hardware Baud rate generator that allows setting
+; much higher baud rates than the 230400 allowed by the normal one
+; directly supported in the HBIOS.  this is a bit more complicated than
+; just doing an HBIOS call.  arguably, support for this BRG his should 
+; be in the HBIOS.
+;
+; for now, we'll just set it to the max allowed by the HBIOS, which
+; varies by clock rate.  if we are running 18mhz with the clock doubled
+; using the Non-default rom build, which on my Mk4 also requires a memory
+; wait state, then 230400 is settable
+;
+; the HBIOS does interrupt-driven recieve into a 64 byte fifo.  this is
+; not good enough, because the code path is way too long per byte.  the
+; right way to do this is to use DMA.  instead, we disable the interrupt
+; and use tight coded local loops for send and recv of packets.
+;
+; initializing the esp-01, 
+; finding a good speed to talk to it, 
+; getting the configuration from flash
+; connecting to the network, 
+; connecting to the server
+;
+; accordingly, we use the AT command machinery from atlib
+;
+; to store initialization data, we hijack the mqtt_cert partition
+; in it's entirety
+;
+; this partition contains a single string consisting of ascii:
+; DEADC0DE:"<ssid>":"<password>":"<server-name>":<decimal port>
+; where each of the meta-keywords may not contain a colon ':'
+;
+	include	mk4.lib
+
+	public	espreset
+	public	wrtread
+	public	setbaud
+	public	sreset
+	public	flushi
+	public	retbuf
+	public	wificon
+	public	srvcon
+	public	srvdis
+	public	srvping
+	public	delay
+
+	extrn	outch
+	extrn	ismatch
+	extrn	strcpy
+	extrn	strlen
+	extrn	itoa
+	extrn	cpdelim
+	extrn	atcmd
+	extrn	ckok
+	extrn	dprint
+	extrn	debugf
+
+	ifdef USE_180
+
+getstat	macro
+	in0	a,(sr1stat)	; can we send?
+	endm
+getrx	macro
+	in0	a,(sr1rx)	; recv a byte
+	endm
+puttx	macro
+	out0	(sr1tx),a
+	endm
+putctl	macro
+	out0	(sr1ctla),a	; clear error
+	endm
+
+	else
+
+getstat	macro
+	call	gstat
+	endm
+getrx	macro
+	call	getrxd
+	endm
+puttx	macro
+	call	puttxd
+	endm
+putctl	macro
+	call	putctla
+	endm
+
+gstat:	push	bc
+	ld	bc,sr1stat
+	in	a,(c)
+	pop	bc
+	ret
+
+getrxd:	push	bc
+	ld	bc,sr1rx
+	in	a,(c)
+	pop	bc
+	ret
+
+puttxd:	push	bc
+	ld	bc,sr1tx
+	out	(c),a
+	pop	bc
+	ret
+
+putctla:push	bc
+	ld	bc,sr1ctla
+	out	(c),a
+	pop	bc
+	ret
+
+	endif
+;
+; wrtread: gather write, scatter read.
+; the write and read have to be considered to be simultaneous 
+; we run until we have exhausted both send and recv.
+;
+; input 2 iovecs, HL = source, DE = destination
+; vector is array of a byte of buffer length, word addr
+; terminated by length == 0
+; also, after read satisfied, flush everything pending
+;
+; register usage: we use both banks for pointers and from the perspective
+; of the transmit side
+; DE is the next send descriptor, DE' is the send recv descriptor
+; HL is our send buffer, HL' is our recv buffer
+; B is our current send count, C is our recv count
+; once the send direction is done, we repurpose DEHL as the recv timeout
+;
+; if B or C is ever 0, it means that we are done with that direction.
+; when we decrement either after an I/O, we immediately load the next
+; descriptor.
+;
+; error detection takes 2 forms:  we will wait for WRTIME loops after
+; send is complete and not recv complete,
+; plus, if we ever see an overrun, game over.
+;
+; return 
+;	all good, carry clear, A=0
+;	on overrun, carry set, A=0xff
+; 	on timeout, carry set, A=1, C will contain our unread length
+; trashes both banks
+;
+WRTIME	equ	0ffffh
+WRTIME1	equ	00004h
+
+wrtread:
+	debug	'W'
+	call	flushi		; clear the decks
+	push	de
+	exx
+	pop	de
+	call	lddesc		; get recv descriptor
+	exx
+	ld	c,a		; load recv count
+	ex	de,hl
+	call	lddesc		; get send descriptor
+	ld	b,a
+
+w_wlp:	ld	a,b		; anything to send?
+	or	a
+	jr	z,w_rlp		; guess not
+
+	getstat
+	and	txrdy
+	jr	z,w_rlp
+	ld	a,(hl)		; send a byte
+	inc	hl
+	puttx
+	djnz	w_rlp
+
+	call	lddesc		; get next send descriptor
+	or	a		; did we finish writing?
+	ld	b,a
+	jr	nz,w_rlp
+	or	c		; check if we have recv'd everything too
+	jr	z,wrdone		
+	debug	'T'
+	ld	hl,WRTIME
+	ld	de,WRTIME1
+
+w_rlp:	xor	a		; check if we have recv space
+	or	c
+	jr	z,w_wlp
+
+w_rchk:	getstat
+	; and	rxovr
+	bit	6,a
+	jr	nz,w_rovr	; oh, poo!
+	;getstat
+	;and	rxrdy
+	bit	7,a
+	jr	nz,w_rcv	; if so, go get it
+
+	xor	a
+	or	b		; if transmitter empty, check timer
+	jr	nz,w_wlp
+
+	dec	hl		; 32 bit counter!
+	ld	a,h
+	or	l
+	jr	nz, w_rchk
+	debug	't'
+	dec	de
+	ld	a,d
+	or	e
+	jr	nz, w_rchk
+	jr	wtimeout
+
+w_rcv:	getrx			; read a byte
+	dec	c		; bump our recv count
+	exx
+	ld	(hl),a		; store the byte
+	inc	hl
+	; jr	z,w_rnoz	; null terminate
+	ld	(hl),0
+
+w_rnoz:	exx
+	jr	nz,w_wlp	; if recv count
+	
+	exx
+	call	lddesc		; get next recv descriptor
+	exx
+
+	ld	c,a		; are we done?
+	or	b
+	jr	nz,w_wlp
+
+wrdone: call	flushi
+	debug	'D'
+	xor	a
+	ret
+
+wtimeout:
+	exx
+	ld	(hl),a		; null terminate input buffer
+	exx
+	inc	a
+	debug	'X'
+	scf
+	ret
+w_rovr:
+	call	flushi
+	debug	'V'
+	xor	a
+	dec	a
+	ret
+;
+; load i/o vector segment
+; descriptor pointer in DE
+; don't increment past end of array
+; return count in A
+;
+lddesc: ex	de,hl		; descriptor in hl
+	ld	a,(hl)		; count in b
+	or	a
+	jr	z,ldfin
+	inc	hl
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	inc	hl
+ldfin:	ex	de,hl		; buffer in hl
+	ret
+;
+; change the baud rate to HL * 100
+; FIXME: allow setting the baud rate to 512k.
+; only on Z8S180-N, by dicking with the extended ASCI registers
+;
+; time constant = (18mhz/ 2 * baud * clock mode)) -2
+; clock mode = 1, 15, or 64, encoded in DR64 and X1
+;
+; according to um5004, page 157,
+; there's the 3 ways to set the baud rate:
+; If ss2.1.0 = 111, baud rate - fCKA/Clock mode
+; else if BRG mode baud rate = fPHI/(2*(TC+2)*Clock mode)
+; else baud rate -fPHI/((10 + 20*PS) * 2^ss*Clock mode)
+;
+baud3x	equ	00010000b
+baud115	equ	9 + baud3x
+baud230	equ	10 + baud3x
+n_8_1	equ	000000011b
+CIOINIT	equ	4
+ASCI1	equ	1
+
+setbaud:
+	ex	de,hl
+	ld	b,baud115
+	ld	hl,1152
+	or	a
+	sbc	hl,de
+	jr	z,gotb
+	ld	b,baud230
+	ld	hl,2304
+	or	a
+	sbc	hl,de	
+	ret	nz
+
+gotb:	ld	d,b
+	ld	e,n_8_1
+	ld	c,ASCI1
+	ld	b,CIOINIT	; set line characteristics
+	rst	8
+
+	ld	a,0		; disable sr1 interrupts
+	out0	(sr1stat),a
+
+	ret
+;
+; initialize, returning carry if NFG.
+;
+sreset:
+	ld	hl,1152
+	call	setbaud
+
+	call	flushi
+
+	xor	a
+	ret
+;
+; flush any input that might be there
+; in practice, this is just a receive while not short timeout
+; clobbers A and B
+;
+STIME	equ	0ffh
+
+flushi:	debug	'f'
+flir:	ld	b,STIME
+flil: 	getstat	
+	and	rxrdy
+	jr	nz,flget
+	djnz	flil
+
+	ld	a,01100100b
+	putctl
+	ret
+
+flget:	getrx
+	jr	flushi
+
+rsttime	equ	65535
+
+;
+; turn echo mode off; this makes the dialogs much less chatty
+;
+magic:	db	'DEADC0DE',0
+crlf:	db	CR,LF,0
+comma:	db	',',0
+
+ssid:	ds	20		; wifi ssid
+pass:	ds	20		;      password
+host:	ds	20		; cp/net server
+port:	ds	5		;      port
+
+cmdbuf:	ds	256
+sndbuf:	ds	256
+retbuf:	ds	256
+
+retry:	db	3
+mode:	db	0
+
+ate:	db	'ATE0',CR,LF,0
+ateok:	db	'ATE0',CR,LF,CR,LF,'OK',CR,LF,0
+
+modest:	db	'AT+CWMODE=1,0',CR,LF,0
+cfrd:	db	'AT+SYSFLASH=2,"mqtt_cert",0,100',CR,LF,0
+
+;
+; reset the esp-01 by toggling the esprst bit
+; drop it low, wait a little, then set it high
+; we've already reset the serial port, so the baud rate is correct
+; but, we'll want to probe for the best baud rate that works
+; return carry set for error, error code in A
+; on input, set A to 1 to attempt to connect to wifi
+; set A to 2 to attempt to connect to host
+
+espreset:
+	debug	'r'
+	ld	(mode),a
+
+	ld	a,(retry)
+	dec	a
+	ld	(retry),a
+	jr	nz,dorst
+
+lose:	xor	a
+	dec	a
+	ret
+
+dorst:	ld	bc,sdopr
+	in	a,(c)		; get the sd opr register
+        or      esprst		; set the ESP-01 reset line low
+        out	(c),a
+        ld      hl,rsttime
+eloop:	dec     hl
+        ld      a,h
+        or      l
+        jr      nz,eloop
+
+        in      a,(c)		; get the sd opr register
+        and     ~esprst         ; set the ESP-01 reset line high
+        out     (c),a
+
+	ld	hl,4
+	call	delay
+
+	;
+	; clear any cruft in the serial fifo after the reset
+	;
+	call	flushi
+
+	;
+	; we will initially be in echo mode , we'll get 
+	; ATE0crlfcflfOKcrlf back, if we do, win!
+	;
+	ld	hl,ate		; turn echo mode off
+	ld	a,12
+	call	atcmd
+
+	ld	hl,retbuf
+	ld	de,ateok
+	call	ismatch
+	jr	nz,espreset	; if it didn't take
+
+	ld	hl,cfrd		; get configuration flash
+	ld	a,14+100+6	; +SYSFLASH:100,<data>crlfOKcrlf
+	call	atcmd
+
+	ld	hl,retbuf+14+8	; end of magic number
+	ld	(hl),0
+
+	ld	hl,retbuf+14	; check for magic number
+	ld	de,magic
+	call	ismatch
+	jr	z,cfok		; if we found it, all good
+
+	ld	a,1
+	scf
+	ret
+
+	;
+	; let's parse the configuration
+	;
+cfok:	debug	'm'
+	ld	hl,retbuf+14+8+1	
+	ld	de,ssid		; get ssid
+	call	cpdelim
+	ld	de,pass		; get passwd
+	call	cpdelim
+	ld	de,host		; get host
+	call	cpdelim
+	ld	de,port		; get port
+	call	cpdelim
+
+	ld	hl,modest	; set AP mode, no autoconn
+	ld	a,6
+	call	atcmd
+	call	ckok
+
+	ld	a,(mode)
+	or	a
+	ret	z		; mode == 0, only initialize
+	call	wificon		; mode == 1, connect to wifi
+	ret	c
+
+	ld	a,(mode)
+	dec	a
+	ret	z
+	call	srvcon		; mode == 2, connect to server
+
+	ret
+
+wific:	db	'AT+CWJAP=',0
+wifis:	db	'AT+CWSTATE?',CR,LF,0
+
+wificon::
+	debug	'w'
+	;
+	; the connect command gets a bunch of stuff back after a while
+	; 
+	; WIFI CONNECTEDcrlf
+	; WIFI GET IPcrlf
+	;
+	ld	de,sndbuf	; let's connect
+	ld	hl,wific
+	call	strcpy
+	ld	hl,ssid
+	call	strcpy
+	ld	hl,comma
+	call	strcpy
+	ld	hl,pass
+	call	strcpy
+	ld	hl,crlf
+	call	strcpy
+	ld	a,7
+	ld	hl,sndbuf
+	call	atcmd
+	jr	c,gag
+	;
+	; let's poll for our connected state
+	;
+	ld	hl,4
+	call	delay
+
+	ld	b,4
+	
+cloop:	debug	'P'
+	push	bc
+	ld	hl,wifis	; +CWSTATE:?,<ssid>CRLF
+	ld	a,12
+	call	atcmd
+	pop	bc
+	jr	c,gag
+	ld	a,(retbuf+9)
+	cp	'2'
+	jr	z,conok
+	ld	hl,1
+	call	delay
+	djnz	cloop
+
+gag:	debug	'u'
+	scf
+	ret
+	
+conok:	debug	'c'
+	xor	a
+	ret
+;
+; delay HL seconds
+;
+delay:	debug	'd'
+	push	bc
+	ld	h,l
+	ld	l,0
+	add	hl,hl
+	add	hl,hl
+rloop:  ld      b,0
+rli:    ex      (sp),hl
+        ex      (sp),hl
+        djnz    rli
+        dec     hl
+        ld      a,h
+        or      l
+        jr      nz,rloop
+	pop	bc
+	ret
+;
+; ping server
+;
+pingrq:	db	'AT+PING=',0
+
+srvping:debug	'p'
+	ld	hl,pingrq 	; 'AT+PING='
+	ld	de,sndbuf
+	call	strcpy
+	ld	hl,host		; host from config flash
+	call	strcpy
+	ld	hl,crlf
+	call	strcpy	
+	ld	hl,sndbuf	; +PING:TIMEOUTcrlf or PING:<x>crlf
+	ld	a,9
+	call	atcmd
+	ld	a,(retbuf+6)
+	cp	'T'
+	jr	z,noping
+	xor	a
+	ret
+
+noping:	scf
+	ret
+
+;
+; connect to server
+;
+conrq:	db	'AT+CIPSTART="TCP",',0
+conmdr:	db	'AT+CIPRECVMODE=1',CR,LF,0
+conmdt:	db	'AT+CIPMODE=0',CR,LF,0
+
+srvcon:	debug	'C'
+	ld	hl,conrq	; build the connect command
+	ld	de,sndbuf
+	call	strcpy
+	ld	hl,host		; add host
+	call	strcpy
+	ld	hl,comma
+	call	strcpy
+	ld	hl,port		; add port
+	call	strcpy
+	ld	hl,crlf
+	call	strcpy
+
+	ld	hl,sndbuf
+	ld	a,13
+	call	atcmd
+	jr	c,losec
+
+	ld	hl,conmdr	; set polled (passive) recv mode
+	ld	a,4
+	call	atcmd
+	jr	c,losec
+
+	ld	hl,conmdt	; set normal transmission mode
+	ld	a,4
+	call	atcmd
+	jr	c,losec
+
+	debug	'S'
+	xor	a
+	ret
+
+losec:	debug	'L'
+	scf
+	ret
+
+;
+; disconnect from server
+;
+srvoff: db      'AT+CIPCLOSE',CR,LF,0
+
+srvdis:
+	ld	hl,srvoff
+        ld      a,6
+        call    atcmd
+	ret	nc
+
+	scf
+	ret

@@ -1,0 +1,22 @@
+	org	100h
+start:
+	ld	de,rsxpb
+	ld	c,60
+	call	5
+	or	a
+	ld	de,failed
+	jp	nz,fail
+	ld	de,done
+fail:
+	ld	c,9
+	call	5
+	jp	0
+
+failed:	defb	'Failed to remove RSX',13,10,'$'
+done:	defb	'RSX set to remove',13,10,'$'
+
+rsxpb:	defb	113
+	defb	1
+	defw	005Dh
+
+	end

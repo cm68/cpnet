@@ -1,0 +1,502 @@
+;
+; Translate text file between CP/M and Unix line-ends
+;
+wboot	equ	0000h
+bdos	equ	0005h
+cmdline	equ	0080h
+
+cr	equ	13
+lf	equ	10
+eof	equ	26
+
+conout	equ	2
+print	equ	9
+open	equ	15
+close	equ	16
+serfst	equ	17
+sernxt	equ	18
+delete	equ	19
+read	equ	20
+write	equ	21
+make	equ	22
+rename	equ	23
+setdma	equ	26
+setatr	equ	30
+parse	equ	152
+
+buflen	equ	128
+
+	org	0100h
+	jp	start
+
+infile:	defs	36
+outfile:
+	defs	36
+tmpfile:
+	defs	36
+
+sawcr:	defb	0
+conv:	defb	0
+bytcnt:	defb	0
+flptr:	defw	0
+flcnt:	defb	0
+
+pfcb:	defw	0		; text to parse
+	defw	0		; output FCB
+
+; TODO: support things like A:=B:*.asm[u]
+start:
+	ld	sp,stack
+	ld	de,cmdline
+	ld	a,(de)
+	inc	de
+	or	a
+	jp	z,help
+	ld	l,a
+	ld	h,0
+	add	hl,de
+	ld	(hl),0		; ensure NUL terminated
+	ex	de,hl
+	ld	(pfcb),hl
+	ld	hl,outfile
+	ld	(pfcb+2),hl
+	ld	de,pfcb
+	ld	c,parse
+	call	bdos
+	ld	a,h
+	and	l
+	cp	0FFh
+	jp	z,parerr
+	ld	a,(hl)		; HL point to next, unparsed, char
+	cp	'='
+	jp	nz,parerr
+	inc	hl
+	ld	(pfcb),hl
+	ld	hl,infile
+	ld	(pfcb+2),hl
+	ld	de,pfcb
+	ld	c,parse
+	call	bdos
+	ld	a,h
+	and	l
+	cp	0FFh
+	jp	z,parerr
+	ld	a,(hl)		; HL point to next, unparsed, char
+	cp	'['
+	jp	nz,parerr	; make this optional, default is no conversion?
+	inc	hl
+	ld	a,(hl)
+	and	0DFh		; toupper
+	cp	'U'
+	jp	z,convok
+	cp	'C'
+	jp	nz,parerr
+convok:
+	and	010h		; 0=to-cp/m, ~0=to-unix
+	ld	(conv),a
+	inc	hl
+	ld	a,(hl)
+	cp	']'
+	jp	nz,parerr
+	inc	hl
+	ld	a,(hl)
+	or	a
+	jp	nz,parerr
+	ld	hl,infile
+	call	chkafn
+	jp	nc,multcp
+	ld	a,(outfile+1)
+	cp	' '
+	jp	nz,noblank
+	ld	de,outfile+1
+	ld	hl,infile+1
+	ld	bc,11
+	ldir
+	ld	a,(outfile+1)
+	cp	' '
+	jp	z,parerr
+noblank:
+
+	ld	hl,outfile
+	call	chkafn
+	jp	nc,parerr
+	call	trfile		; errors abort, do not return here
+	jp	wboot
+
+multcp:
+	ld	a,(outfile+1)
+	cp	' '
+	jp	nz,parerr
+	; make list of matching files, then
+	; translate each one...
+	ld	hl,flist
+	ld	(flptr),hl
+	xor	a
+	ld	(flcnt),a
+	ld	de,inbuf
+	ld	c,setdma
+	call	bdos
+	ld	de,infile
+	ld	c,serfst
+	call	bdos
+	cp	0FFh
+	jp	z,inofile
+serloop:
+
+	rlca
+	rlca
+	rlca
+	rlca
+	rlca			; * 32
+	ld	e,a
+	ld	d,0
+	ld	hl,inbuf
+	add	hl,de
+	inc	hl
+	ex	de,hl
+	ld	hl,(flptr)
+	ex	de,hl
+	ld	bc,11
+	ldir
+	ex	de,hl
+	ld	(hl),'$'
+	inc	hl
+	ld	(flptr),hl
+	ld	a,(flcnt)
+	inc	a
+	ld	(flcnt),a
+	ld	de,0
+	ld	c,sernxt
+	call	bdos
+	cp	0FFh
+	jp	nz,serloop
+	; got list of 'flcnt' files at 'flist'
+	; There must be at least one if we get here...
+	ld	de,cpying
+	ld	c,print
+	call	bdos
+	ld	hl,flist
+	ld	a,(flcnt)
+floop:
+	push	af
+	push	hl
+	ld	de,fprefx
+	ld	c,print
+	call	bdos
+	pop	de
+	push	de
+	ld	c,print
+	call	bdos
+	pop	hl
+	push	hl
+	ld	de,infile+1
+	ld	bc,11
+	ldir
+	ld	hl,infile+1
+	ld	de,outfile+1
+	ld	bc,11
+	ldir
+	call	trfile
+	pop	hl
+	pop	af
+	ld	bc,12
+	add	hl,bc
+	dec	a
+	jp	nz,floop
+	jp	wboot
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Translate file infile => outfile
+trfile:
+	xor	a
+	ld	(infile+12),a
+	ld	(outfile+12),a
+	ld	hl,outfile
+	ld	de,tmpfile
+	ld	bc,16
+	ldir
+	ld	hl,tmpfile+9
+	ld	(hl),'$'
+	inc	hl
+	ld	(hl),'$'
+	inc	hl
+	ld	(hl),'$'
+	; FCBs all setup.
+	ld	de,infile
+	ld	c,open
+	call	bdos
+	cp	0FFh
+	jp	z,inofile
+	xor	a
+	ld	(infile+32),a
+	ld	de,tmpfile
+	ld	c,delete
+	call	bdos
+	ld	de,tmpfile
+	ld	c,make
+	call	bdos
+	cp	0FFh
+	jp	z,mkerr
+	ld	(sawcr),a
+	call	infill
+	call	outinit
+chrloop:
+
+	call	getchr
+	cp	eof
+	jp	z,ineof
+	ld	d,0
+	cp	cr
+	jp	nz,notcr
+	ld	a,(conv)
+	or	a
+	jp	nz,chrloop	; to-unix: drop all CR
+	inc	d
+	ld	a,cr
+notcr:	cp	lf
+	jp	nz,notlf
+	ld	a,(conv)
+	or	a
+	jp	nz,crlfok	; to-unix: do not add back CR
+	ld	a,(sawcr)
+	or	a
+	jp	nz,crlfok
+	ld	a,cr
+	call	putchr
+	ld	d,0
+crlfok:
+	ld	a,lf
+notlf:
+	push	de
+	call	putchr
+	pop	de
+	ld	a,d
+	ld	(sawcr),a
+	jp	chrloop
+
+ineof:
+	ld	a,(conv)
+	or	a
+	jp	nz,done0	; Unix file, set byte count instead...
+ineof0:
+	ld	a,eof
+	call	putchr
+	; fill buffer and force flush...
+	ld	a,(outcnt)
+	or	a		; zero means next putchr will flush...
+	jp	nz,ineof0
+done0:
+	ld	a,(outcnt)
+	ld	c,a
+	ld	a,buflen
+	sub	c
+	ld	(bytcnt),a	; 0..128
+	call	outflush	; flushes full 128 byte record
+done:
+	; close all and rename tmpfile...
+	call	closeall
+	ld	a,(conv)
+	or	a
+	jp	z,iscpm
+	ld	a,(bytcnt)
+	ld	(tmpfile+32),a
+	ld	hl,tmpfile+6
+	ld	a,(hl)
+	or	80h
+	ld	(hl),a
+	ld	de,tmpfile
+	ld	c,setatr
+	call	bdos		; trim file back to exact byte count
+	; check error? aborting doesn't help
+iscpm:
+	ld	de,outfile
+	ld	c,delete
+	call	bdos
+	; check error? do anything different?
+	ld	hl,outfile
+	ld	de,tmpfile+16
+	ld	bc,16
+	ldir
+	ld	de,tmpfile
+	ld	c,rename
+	call	bdos
+	cp	0FFh
+	jp	z,renerr
+	ret
+
+getchr:
+	ld	a,(incnt)
+	or	a
+	call	z,infill
+	ld	a,(incnt)
+	dec	a
+	ld	(incnt),a
+	ld	hl,(inptr)
+	ld	a,(hl)
+	inc	hl
+	ld	(inptr),hl
+	ret
+
+putchr:
+	push	af
+	ld	a,(outcnt)
+	or	a
+	call	z,outflush
+	ld	a,(outcnt)
+	dec	a
+	ld	(outcnt),a
+	pop	af
+	ld	hl,(outptr)
+	ld	(hl),a
+	inc	hl
+	ld	(outptr),hl
+	ret
+
+outflush:
+
+	ld	de,outbuf
+	ld	c,setdma
+	call	bdos
+	ld	de,tmpfile
+	ld	c,write
+	call	bdos
+	or	a
+	jp	nz,outerr
+outinit:
+
+	ld	hl,outbuf
+	ld	(outptr),hl
+	ld	a,buflen
+	ld	(outcnt),a
+	ret
+
+infill:
+	ld	de,inbuf
+	ld	c,setdma
+	call	bdos
+	ld	de,infile
+	ld	c,read
+	call	bdos
+	or	a
+	jp	z,inok
+	cp	1
+	jp	nz,inerr
+	ld	a,eof		; should never happen for text files, but handle anyway
+	ld	(inbuf),a
+inok:
+	ld	hl,inbuf
+	ld	(inptr),hl
+	ld	a,buflen
+	ld	(incnt),a
+	ret
+
+closeall:
+
+	ld	de,tmpfile
+	ld	c,close
+	call	bdos
+	ld	de,infile
+	ld	c,close
+	call	bdos
+	ret
+
+parerr:
+	ld	de,perrm
+	ld	c,print
+	call	bdos
+	ld	de,cmdline
+	ld	a,(de)
+	inc	de
+	ld	l,a
+	ld	h,0
+	add	hl,de
+	ld	(hl),'$'
+	ld	c,print
+	call	bdos
+help:
+	ld	de,usage
+	ld	c,print
+	call	bdos
+	jp	wboot
+
+mkerr:				; infile open, partial cleanup
+	ld	de,merrm
+	jp	abort
+
+inerr:				; both files open
+	ld	de,ierrm
+	jp	abort
+
+outerr:				; both files open
+	ld	de,oerrm
+abort:
+	push	de
+	call	closeall
+	ld	de,tmpfile
+	ld	c,delete
+	call	bdos
+	pop	de
+	jp	errmsg
+
+renerr:				; files are all closed, no cleanup
+	ld	de,rerrm
+	jp	errmsg
+
+inofile:
+				; files not open yet, no cleanup
+	ld	de,nerrm
+errmsg:
+	push	de
+	ld	a,(flcnt)
+	or	a
+	jp	z,nocrlf
+	ld	e,cr
+	ld	c,conout
+	call	bdos
+	ld	e,lf
+	ld	c,conout
+	call	bdos
+nocrlf:
+	pop	de
+	ld	c,print
+	call	bdos
+	jp	wboot
+
+; Check for '?' (ambiguous file name) in FCB HL
+; Return CY set if unambiguous
+chkafn:
+	ld	b,13
+qchk:
+	ld	a,(hl)
+	cp	'?'
+	ret	z
+	inc	hl
+	dec	b
+	jp	nz,qchk
+	scf
+	ret
+
+
+perrm:	defb	'Invalid: $'
+ierrm:	defb	'Error reading input$'
+oerrm:	defb	'Error writing output$'
+nerrm:	defb	'No file found for input$'
+merrm:	defb	'Error creating temp$'
+rerrm:	defb	'Error renaming temp$'
+usage:	defb	cr,lf,'Usage: TR A:{outfile}=B:infile[U|C]$'
+cpying:	defb	'Copying -$'
+fprefx:	defb	cr,lf,'    $'
+
+outcnt:	defb	0
+outptr:	defw	0
+incnt:	defb	0
+inptr:	defw	0
+
+stack	equ	$+64
+
+outbuf	equ	stack
+inbuf	equ	outbuf+buflen
+flist	equ	inbuf+buflen
+
+	end

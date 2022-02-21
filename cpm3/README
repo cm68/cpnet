@@ -1,0 +1,29 @@
+the cp/net client implementation assumes a tcp/ip stack connecting directly
+with a cp/net server.
+
+the only snios currently is for an ESP-01, running current AT command firmware
+connected to ASCI1 on a retrobrew Mark IV on a boardlet.
+
+to flash the ESP-01 with the current firmware:
+
+esptool.py --chip esp8266 --port /dev/ttyUSB2 write_flash 0 ESP-01-1M.bin
+
+the esp-01 module needs to be configured with network connection information
+this is done with the espconf.com program.
+
+espconf
+since CP/M translates everything to upper case, espconf can't get
+the arguments from the command line.  so, it prints out the current
+config and prompts for the new values.
+
+to load:
+	A>NDOS
+
+To stop/unload CP/NET:
+	A>RSXRM NDOS
+
+current issues:
+not reliable
+big
+too many copies
+

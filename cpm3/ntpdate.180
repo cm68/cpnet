@@ -1,0 +1,377 @@
+	.Z80	; Accept Z80 instruction format
+	maclib	Z80.LIB
+
+	ext	ntwkin, ntwkst, cnftbl, sndmsg, rcvmsg, ntwker, ntwkbt, ntwkdn, cfgtbl
+
+bdos	equ	0005h
+cmdln	equ	0080h
+
+; BDOS functions
+conout	equ	2
+print	equ	9
+getver	equ	12
+sgscb	equ	49
+
+; CP/NET NDOS functions
+nsend	equ	66
+nrecv	equ	67
+
+	org	0100h
+	jp	start
+
+ioport:	defb	018h
+
+vers:	defw	0
+scbadr:	defw	0
+
+gettime:
+	defb	0, 0, 2, 105, 0, 0
+gottime:
+	defb	1, 2, 0, 105, 4, 0, 0, 0, 0, 0	; just prediction of what will be received
+
+scbpb:	defb	03Ah		; offset of SCB address (reserved area)
+	defb	0		; get word, (SCB address)
+	defw	0
+
+; assume < 100
+decout:
+	ld	b,'0'
+decot0:
+	sub	10
+	jp	c,decot1
+	inc	b
+	jp	decot0
+decot1:
+	add	a,10
+	add	a,'0'
+	push	af
+	ld	a,b
+	call	prout
+	pop	af
+	jp	prout
+
+; Keeps number in HL - caller must preserve/init
+; Returns CY for invalid
+hexnum:
+	sub	'0'
+	ret	c
+	cp	9+1
+	jp	nc,hexnm1
+hexnm2:
+	add	hl,hl
+	add	hl,hl
+	add	hl,hl
+	add	hl,hl
+	or	l
+	ld	l,a
+	ret
+hexnm1:
+	sub	'A'-'9'
+	ret	c
+	cp	5+1
+	ccf
+	ret	c
+	add	a,10
+	jp	hexnm2
+
+hexout:
+	push	af
+	rrca
+	rrca
+	rrca
+	rrca
+	call	hexdig
+	pop	af
+hexdig:
+	call	tohex
+prout:
+	ld	e,a
+	ld	c,conout
+	jp	bdos
+
+tohex:
+	and	0Fh
+	add	a,90h
+	daa
+	adc	a,40h
+	daa
+	ret
+
+wdays:	defb	'Sun$Mon$Tue$Wed$Thu$Fri$Sat$'
+
+; HL = CP/M Date-time field, w/o seconds
+; Print date and time to console.
+prdate:
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	inc	hl
+	push	hl
+	push	de
+	ex	de,hl
+	call	weekdy
+	add	a,a
+	add	a,a		; *4
+	ld	c,a
+	ld	b,0
+	ld	hl,wdays
+	add	hl,bc
+	ex	de,hl
+	call	xitmsg
+	ld	a,' '
+	call	prout
+	pop	de
+; compute year
+	ld	c,78		; base year, epoch, binary
+	ld	b,078h		; year, BCD
+	; special-case date=0...
+	ld	a,e
+	or	d
+	jp	nz,prdat0
+	inc	de
+prdat0:
+	ld	hl,365
+	ld	a,c
+	and	03h		; Not strictly true, but works until year 2100...
+	jp	nz,prdat1
+	inc	hl
+prdat1:	push	hl
+	or	a
+	sbc	hl,de
+	pop	hl
+	jp	nc,prdat2	; done computing year...
+	ex	de,hl
+	or	a
+	sbc	hl,de
+	ex	de,hl
+	inc	c
+	ld	a,b
+	add	a,1
+	daa
+	ld	b,a
+	jp	prdat0
+prdat2:				; DE = days within year 'C'
+	push	bc		; save (2-digit) year, B = BCD, C = binary (until 2155)
+	ld	hl,month0+24
+	ld	a,c
+	and	03h
+	jp	nz,prdat3
+	ld	hl,month1+24
+prdat3:				; compute month, DE = days in year,HL = mon-yr-days table adj for leap
+	ld	b,12
+prdat4:
+	dec	hl
+	dec	hl
+	dec	b
+	jp	m,prdat5	; should never happen...
+	push	hl
+	push	de
+	ld	a,(hl)
+	inc	hl
+	ld	h,(hl)
+	ld	l,a
+		; DE = days in year, HL = ytd[month]
+	or	a
+	sbc	hl,de
+	ld	a,l		; potential remainder (neg)
+	pop	de
+	pop	hl
+	jp	nc,prdat4
+prdat5:				; B = month, 0-11; A = -dom
+	neg
+	push	af
+	inc	b
+	ld	a,b
+	call	decout
+	ld	e,'/'
+	ld	c,conout
+	call	bdos
+	pop	af
+	call	decout
+	ld	e,'/'
+	ld	c,conout
+	call	bdos
+	pop	bc
+	ld	a,b		; already BCD
+	call	hexout
+	ld	e,' '
+	ld	c,conout
+	call	bdos
+	pop	hl		; -> BCD hours
+	ld	a,(hl)
+	inc	hl
+	push	hl
+	call	hexout
+	ld	e,':'
+	ld	c,conout
+	call	bdos
+	pop	hl		; -> BCD minutes
+	ld	a,(hl)
+	inc	hl
+	push	hl
+	call	hexout
+	ld	e,':'
+	ld	c,conout
+	call	bdos
+	pop	hl		; -> BCD seconds
+	ld	a,(hl)
+	jp	hexout
+
+;		J   F   M   A   M   J   J   A   S   O   N   D
+month0:	defw	0, 31, 59, 90,120,151,181,212,243,273,304,334
+month1:	defw	0, 31, 60, 91,121,152,182,213,244,274,305,335
+
+start:
+	ld	c,getver
+	call	bdos
+	ld	(vers),hl
+	ld	a,l
+	cp	30
+	jp	c,badvers
+	ld	hl,cmdln
+	ld	c,(hl)
+	inc	hl
+sid1:
+	ld	a,(hl)
+	cp	' '
+	jp	nz,sid0
+	inc	hl
+	dec	c
+	jp	nz,sid1
+	jp	start1		; no params, use defaults
+
+sid0:				; scan hex number as server ID
+	ex	de,hl
+	ld	hl,0
+sid2:
+	ld	a,(de)
+	inc	de
+	call	hexnum
+	jp	c,sid3
+	dec	c
+	jp	nz,sid2
+sid3:
+	ld	a,l
+	ld	(gettime+1),a
+
+start1:
+	; TODO: handle MP/M...
+	ld	de,scbpb
+	ld	c,sgscb
+	call	bdos
+	ld	(scbadr),hl
+
+	ld	hl,(vers)
+	ld	a,2		; bit for CP/Net
+	and	h
+	jp	z,nocpnet
+
+	ld	de,gettime
+	ld	c,nsend
+	call	bdos
+	or	a
+	jp	nz,error
+	ld	de,gottime
+	ld	c,nrecv
+	call	bdos
+	or	a
+	jp	nz,error
+	jp	settime
+
+nocpnet:
+
+	ld	a,(ntwkin)
+	cp	0C9h		; RET
+	jp	z,error2
+	call	ntwkin
+	ld	bc,gettime
+	call	sndmsg
+	or	a
+	jp	nz,error
+
+	ld	bc,gottime
+	call	rcvmsg
+	or	a
+	jp	nz,error
+	call	ntwkdn		; needed? desirable?
+settime:
+
+	; BDOS function 104 forces seconds to zero...
+	; but we need to inform the BIOS that time changed...
+	; So we set SCB fields then call BIOS function
+	ld	hl,(scbadr)
+	ld	de,058h		; date/time
+	add	hl,de
+	ex	de,hl
+	ld	hl,gottime+5
+	ld	bc,5		; length of date/time
+	di
+	ldir
+	ei
+	ld	de,biospb
+	ld	c,50
+	call	bdos
+	ld	de,done
+	ld	c,print
+	call	bdos
+	ld	hl,gottime+5
+	call	prdate
+	ret
+
+biospb:	defb	26		; BIOS TIME function
+	defb	0		; A
+	defw	00FFh		; BC - C=FF: SET TIME
+	defw	0		; DE
+	defw	0		; HL
+
+; HL=CP/M date value (days since epoch)
+; From DATE.PLM: week$day = (word$value + base$day - 1) mod 7;
+;                base$day  lit '0',
+weekdy:	dec	hl		; 1/1/78 is "0" (Sun), -1 for offset
+	ld	de,7000
+	or	a
+wd0:	sbc	hl,de
+	jr	nc,wd0
+	add	hl,de
+	ld	de,700
+	or	a
+wd1:	sbc	hl,de
+	jr	nc,wd1
+	add	hl,de
+	ld	de,70
+	or	a
+wd2:	sbc	hl,de
+	jr	nc,wd2
+	add	hl,de
+	ld	de,7
+	or	a
+wd3:	sbc	hl,de
+	jr	nc,wd3
+	add	hl,de
+	ld	a,l
+	ret
+
+error:
+	ld	de,errmsg
+	jp	xitmsg
+
+error2:
+	ld	de,errcpn
+	jp	xitmsg
+
+badvers:
+
+	ld	de,vermsg
+xitmsg:
+	ld	c,print
+	call	bdos
+	ret
+
+done:	defb	'Time was set to: $'
+errmsg:	defb	7,'Error retrieving network time.$'
+errcpn:	defb	7,'This program requires CP/NET.$'
+vermsg:	defb	7,'This program requires BDOS >= 3.0.$'
+
+; Must be linked with an SNIOS, at least SNIOS000
+
+	end

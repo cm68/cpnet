@@ -1,0 +1,412 @@
+;
+; subroutine library for AT command set
+;
+	include	mk4.lib
+
+	public	cpdelim
+	public	strlen
+	public	strcpy
+	public	itoa
+	public	atoi
+	public	ismatch
+	public	atcmd
+	public	atcmdl
+	public	ckok
+
+	extrn	retbuf
+	extrn	wrtread
+
+	public	outch
+	public	outstr
+	public	hexdump
+	public	hexdmps
+	public	hex2
+	public	hex4
+        public  dprint
+	public	debugf
+
+AT_DEBUG	equ	1
+
+debugf:db	0
+
+;
+; copy HL to DE, delimited by comma or null
+; advance HL past delimiter if it's not null
+; DE is null-terminated, and does not contain the delimiter
+; if HL is delimiter or null, return carry set immediately,
+;   and don't update DE
+;
+cpdelim:ld	a,(hl)
+	or	a
+	jr	z,cpdstp
+	cp	','
+	jr	nz,cpdlp
+	inc	hl
+cpdstp:	scf
+	ret
+cpdlp:	ld	a,(hl)
+	ld	(de),a
+	or	a
+	jr	z,cpdret
+	cp	0ffh
+	jr	z,cpdret
+	inc	hl
+	inc	de
+	cp	','
+	jr	nz,cpdlp
+	dec	de
+cpdret:	xor	a
+	ld	(de),a
+	ret
+;
+; count buffer DE into HL
+; has side effect of leaving DE pointing at null
+;
+strlen:	ld	hl,0
+strlp:	ld	a,(de)
+	or	a
+	ret	z
+	inc	de
+	inc	hl
+	jr	strlp
+;
+; copy null-terminated string HL to DE
+; leave DE pointing at null, so useful for appending to DE
+;
+strcpy:	ld	a,(hl)
+	ld	(de),a
+	or	a
+	ret	z
+	inc	hl
+	inc	de
+	jr	strcpy
+;
+; return z if (HL) matches (DE), both null-terminated
+;
+ismatch:
+isml:
+	ld	a,(de)
+	cp	(hl)
+	ret	nz		; not equal - lose
+	or	(hl)
+	ret	z		; both null - match
+	inc	hl
+	inc	de
+	jr	isml
+;
+; return integer in HL corresponding to string in DE.
+; leave DE pointing at delimiter
+;
+atoi:
+	ld	hl,0		; zero accu
+atoin:	ld	a,(de)
+	sub	'0'		; less than '0', done
+	ret	c
+	cp	9+1		; greater than '9', done
+	ret	nc
+
+	inc	de
+
+	add	hl,hl		; hl *= 10
+	ld	b,h
+	ld	c,l		
+	add	hl,hl
+	add	hl,hl
+	add	hl,bc
+
+	add	l		
+	ld	l,a
+	ld	a,0
+	adc	h
+	ld	h,a
+	jr	atoin
+;
+; take integer in HL and put it into decimal string at DE
+; return A as number of characters stored
+; return with DE pointing past string
+;
+itoa:	exx
+	ld	de,'0'		; leading '0' and digit count 0
+	exx
+	ld	bc,-10000
+	call	Num1
+	ld	bc,-1000
+	call	Num1
+	ld	bc,-100
+	call	Num1
+	ld	c,-10
+	call	Num1
+	ld	c,-1
+	call	Num1
+	exx	
+	ld	a,d
+	exx
+	or	a
+	ret	nz
+	inc	de
+	inc	a
+	ret 
+
+Num1:	ld	a,'0'-1
+Num2:	inc	a
+	add	hl,bc
+	jr	c,Num2
+	sbc	hl,bc
+
+putd:	ld	(de),a		; store digit
+	exx
+	or	e		; or in already digits
+	ld	e,a
+	sub	'1'		; any of them > '0' carry if no
+	jr	c,noput
+	inc	d
+	exx
+	inc	de
+	ret
+noput:	exx
+	ret
+
+aok:    db      CR,LF,'OK',CR,LF,0
+
+;
+; return z if return buffer contains an OK
+;
+ckok:   ld      hl,retbuf
+        ld      de,aok
+        jp      ismatch
+
+ss_wlen:db      0
+ss_wbuf:dw      0
+        db      0
+
+ss_rlen:db      0
+ss_rbuf:dw      retbuf
+        db      0
+
+atlead:	db	'AT command: ',0
+crlfb:	db	CR,LF,0
+atretm:	db	'AT response: ',0
+
+;
+; variation on atcmd, where we send in a length in c
+;
+atcmdl:
+	ld	(ss_rlen),a
+	ld	(ss_wbuf),hl
+	ld	a,c
+	jr	atgo
+;
+; send a simple command and get a simple answer
+; command in HL, expected response length in A
+atcmd:
+        ld      (ss_rlen),a
+        ld      (ss_wbuf),hl
+	ex	de,hl
+        call    strlen
+        ld      a,l
+atgo:	ld      (ss_wlen),a
+
+	if	AT_DEBUG
+	ld	a,(debugf)
+	bit	1,a
+	jr	z,doat
+
+	ld	de,atlead
+	call	outstr
+	ld	a,(ss_rlen)
+	call	hex2
+	ld	de,crlfb
+	call	outstr
+	ld	hl,(ss_wbuf)
+	ld	a,(ss_wlen)
+	ld	c,a
+	call	hexdump
+	endif
+
+doat:	ld	hl,ss_wlen
+	ld	de,ss_rlen
+        call    wrtread
+
+	if	AT_DEBUG
+	push	af
+	ld	a,(debugf)
+	bit	1,a
+	jr	z,nodbg
+	pop	af
+
+	push	af
+	push	af
+	ld	de,atretm
+	call	outstr
+	pop	af
+	call	hex2
+	ld	a,':'
+	call	outch
+	ld	a,c
+	call	hex2
+	ld	de,crlfb
+	call	outstr
+	ld	hl,(ss_rbuf)
+	ld	a,(ss_rlen)
+	ld	c,a
+	call	hexdump
+nodbg:
+	pop	af
+	endif
+
+        ret
+;
+; hex dump a string in HL
+;
+hexdmps:
+	push	hl
+	push	de
+	push	bc
+	push	hl
+	ex	de,hl
+	call	strlen
+	inc	l
+	ld	c,l
+	pop	hl
+	call	hexdump
+	pop	bc
+	pop	de
+	pop	hl
+	ret
+;
+; dump a buffer in hex with ascii
+; buffer in HL, count in C
+;
+abuf:   ds      16
+        db      CR,LF,00h
+
+hexdump:
+
+nextl:  ld      de,abuf         ; a new line
+        ld      b,16
+
+doline: call    hex4
+        ld      a,':'
+        call    outch
+        ld      a,SPACE
+        call    outch
+
+nb:    	ld	a,16
+	sub	b
+	cp	c
+	jr	c,getit
+
+	ld	a,SPACE
+	call	outch
+	ld	a,SPACE
+	call	outch
+	ld	a,SPACE
+	call	outch
+	ld	a,SPACE
+	jr	pb
+ 
+getit:	ld      a,(hl)          ; hex digits
+        call    hex2
+        ld      a,SPACE
+        call    outch
+        ld      a,(hl)
+        inc     hl
+        cp      020h
+        jr      c,bad
+        cp      07fh
+        jr      c,pb
+bad:    ld      a,'.'
+pb:     ld      (de),a
+        inc     de
+        ld      a,b
+        and     3
+        cp      1
+        jr      nz,no4
+        ld      a,SPACE
+        call    outch
+no4:    djnz    nb
+        ld      de,abuf
+        call    outstr
+        ld	a,c
+	sub	16
+	ld	c,a
+	ret	c
+        jr      nz,nextl
+        ret
+
+;
+; output hex address in HL
+;
+hex4:   ld      a,h
+        call    hex2
+        ld      a,l
+        ; fall through
+;
+; output hex digit in A
+; destroys A
+;
+hex2:   push    af
+        rrc     a
+        rrc     a
+        rrc     a
+        rrc     a
+        call    nib
+        pop     af
+nib:    and     0fh
+        add     '0'
+        cp      '9'+1
+        jr      c,notlet
+        add     7
+notlet: call    outch
+        ret
+
+;
+; send character in A to console
+; preserves HL, DE, BC
+;
+outch:  push    hl
+        push    de
+        push    bc
+        ld      bc,0100h
+        ld      e,a
+        rst	8
+        pop     bc
+        pop     de
+        pop     hl
+        ret
+;
+; send null terminated string in DE
+;
+outstr: ld      a,(de)
+        or      a
+        ret     z
+        call    outch
+        inc     de
+        jr      outstr
+
+dprint:
+        push    bc
+        push    de
+        push    hl
+        ld      bc,0100h
+        ld      e,a
+        exx
+        ex      af,af'
+        push    af
+        push    bc
+        push    de
+        push    hl
+        exx
+        rst	8
+        exx
+        pop     hl
+        pop     de
+        pop     bc
+        pop     af
+        ex      af,af'
+        exx
+        pop     hl
+        pop     de
+        pop     bc
+        ret
+
