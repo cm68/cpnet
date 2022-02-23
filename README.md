@@ -8,3 +8,4 @@ otherwise useless RS-425 serial port.
 
 https://sites.google.com/a/zen-room.org/home/the-zen-room/mark-iv-wifi
 
+Status:  It's still a bit broken
