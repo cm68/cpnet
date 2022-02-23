@@ -5,3 +5,6 @@ is a speedy Z180 with 512K ram, 512K rom, and it runs at 38 mhz.
 
 the network hardware is an ESP-01 module grafted to the board in place of a
 otherwise useless RS-425 serial port.
+
+https://sites.google.com/a/zen-room.org/home/the-zen-room/mark-iv-wifi
+
