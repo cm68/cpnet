@@ -27,3 +27,9 @@ not reliable
 big
 too many copies
 
+the utility programs are either original or disassemblies from binaries of unknown
+provenance.  the intention is to have all source, and all buildable.
+
+to do:
+
+cpnetsts.com dskreset.com mail.com network.com

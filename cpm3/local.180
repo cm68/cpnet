@@ -17,34 +17,47 @@ netcfg	equ	045H
 	org	0100H
 tpa: 	JP	start		; 0100 .I.	  c3 49 01 
 
-H0103: 	DB	"LST:CON:"
-H010b: 	DB	0DH,0AH,"CP/Net is not loaded.$"
+devtab:	DB	"LST:CON:"
+nonetm:	DB	0DH,0AH,"CP/Net is not loaded.$"
 H0123: 	DB	0DH,0AH,"Illegal parameter specification.$"
 
 H0146: 	LD	SP,H039d	; 0146 1..	  31 9d 03 
 
+	;
+	; set up the stack
+	;
 start: 	LD	HL,0		; 0149 !..	  21 00 00 
 	ADD	HL,SP		; 014c 9	  39 
-	LD	(H03c5),HL	; 014d "..	  22 c5 03 
-	LD	HL,H03c5	; 0150 !..	  21 c5 03 
+	LD	(spsave),HL	; 014d "..	  22 c5 03 
+	LD	HL,spsave	; 0150 !..	  21 c5 03 
 	LD	SP,HL		; 0153 .	  f9 
+
+	;
+	; check if version shows cp/net active
+	;
 	CALL	getver		; 0154 ...	  cd 0e 02 
 	LD	DE,0200h	; 0157 ...	  11 00 02 
-	CALL	H037c		; 015a .|.	  cd 7c 03 
+	CALL	andw16		; 015a .|.	  cd 7c 03 
 	LD	A,00H		; 015d >.	  3e 00 
-	CALL	H0393		; 015f ...	  cd 93 03 
+	CALL	subw8		; 015f ...	  cd 93 03 
 	OR	L		; 0162 .	  b5 
-	JP	Z,H01d2		; 0163 ...	  ca d2 01 
+	JP	Z,nonet		; 0163 ...	  ca d2 01 
+
 	CALL	getnet		; 0166 ...	  cd 17 02 
 	LD	(config),HL	; 0169 "..	  22 ca 03 
 	LD	HL,H03d2	; 016c !..	  21 d2 03 
 	LD	(HL),01H	; 016f 6.	  36 01 
 	CALL	H0220		; 0171 ...	  cd 20 02 
+
+	;
+	; uh what? right shift 8 by 2?  that's a constant '0002'
+	;
 	LD	C,02H		; 0174 ..	  0e 02 
 	LD	HL,0008H	; 0176 !..	  21 08 00 
-	CALL	H0387		; 0179 ...	  cd 87 03 
+	CALL	rsh16		; 0179 ...	  cd 87 03 
+
 	EX	DE,HL		; 017c .	  eb 
-	LD	BC,H0103	; 017d ...	  01 03 01 
+	LD	BC,devtab	; 017d ...	  01 03 01 
 	CALL	H02e8		; 0180 ...	  cd e8 02 
 	LD	C,A		; 0183 O	  4f 
 	LD	B,00H		; 0184 ..	  06 00 
@@ -95,7 +108,7 @@ H01c9: 	DW	H0190
 	DW	H01B9
 H01cf: 	JP	H01d8		; 01cf ...	  c3 d8 01 
 
-H01d2: 	LD	BC,H010b	; 01d2 ...	  01 0b 01 
+nonet: 	LD	BC,nonetm	; 01d2 ...	  01 0b 01 
 	CALL	outstr		; 01d5 ...	  cd fe 01 
 H01d8: 	CALL	H01e9		; 01d8 ...	  cd e9 01 
 H01db: 	LD	SP,H039d	; 01db 1..	  31 9d 03 
@@ -104,15 +117,14 @@ H01db: 	LD	SP,H039d	; 01db 1..	  31 9d 03
 	CALL	H01e9		; 01e4 ...	  cd e9 01 
 	EI			; 01e7 .	  fb 
 	HALT			; 01e8 v	  76 
-H01e9: 	LD	HL,(H03c5)	; 01e9 *..	  2a c5 03 
+H01e9: 	LD	HL,(spsave)	; 01e9 *..	  2a c5 03 
 	LD	SP,HL		; 01ec .	  f9 
 	RET			; 01ed .	  c9 
-
 ;
 ; yikes.  print a character in C to the console.  disgusting
 ; code, probably compiled by a really nasty compiler.
 ;
-H01ee: 	LD	HL,ptmp1	; 01ee !..	  21 c7 03 
+outchr:	LD	HL,ptmp1	; 01ee !..	  21 c7 03 
 	LD	(HL),C		; 01f1 q	  71 
 	LD	HL,(ptmp1)	; 01f2 *..	  2a c7 03 
 	LD	H,00H		; 01f5 &.	  26 00 
@@ -120,7 +132,6 @@ H01ee: 	LD	HL,ptmp1	; 01ee !..	  21 c7 03
 	LD	C,prtchr	; 01f8 ..	  0e 02 
 	CALL	bdos		; 01fa ...	  cd 05 00 
 	RET			; 01fd .	  c9 
-
 ;
 ; jeeze, this is awful code to print a dollar-terminated string
 ; pointed at by BC
@@ -134,7 +145,6 @@ outstr:	LD	HL,ptmp3	; 01fe !..	  21 c9 03
 	LD	C,prtstr	; 0208 ..	  0e 09 
 	CALL	bdos		; 020a ...	  cd 05 00 
 	RET			; 020d .	  c9 
-
 ;
 ; get the bdos version
 ; B,H get system type: 
@@ -146,7 +156,6 @@ getver:	LD	DE,0		; 020e ...	  11 00 00
 	LD	C,bdosver	; 0211 ..	  0e 0c 
 	CALL	bdos		; 0213 ...	  cd 05 00 
 	RET			; 0216 .	  c9 
-
 ;
 ; return the address of the cp/net config table
 ;
@@ -278,17 +287,28 @@ H02d2: 	LD	HL,H03d5	; 02d2 !..	  21 d5 03
 	INC	(HL)		; 02e6 4	  34 
 	RET			; 02e7 .	  c9 
 
+	;
+	; 3d6 gets devtab:l, devtab:hi, 2
+	;
 H02e8: 	LD	HL,H03d8	; 02e8 !..	  21 d8 03 
 	LD	(HL),E		; 02eb s	  73 
 	DEC	HL		; 02ec +	  2b 
 	LD	(HL),B		; 02ed p	  70 
 	DEC	HL		; 02ee +	  2b 
 	LD	(HL),C		; 02ef q	  71 
+
 	LD	HL,H03da	; 02f0 !..	  21 da 03 
 	LD	(HL),00H	; 02f3 6.	  36 00 
+	;
+	; wtf - is (3cd) 0 or 1?
+	;
 	LD	HL,H03dc	; 02f5 !..	  21 dc 03 
 	LD	(HL),00H	; 02f8 6.	  36 00 
 	LD	(HL),01H	; 02fa 6.	  36 01 
+
+	;
+	; this is the top of a loop controlled by byte (03dc)
+	;
 H02fc: 	LD	A,(H03d8)	; 02fc :..	  3a d8 03 
 	LD	HL,H03dc	; 02ff !..	  21 dc 03 
 	CP	(HL)		; 0302 .	  be 
@@ -302,6 +322,7 @@ H0312: 	LD	A,03H		; 0312 >.	  3e 03
 	LD	HL,H03d9	; 0314 !..	  21 d9 03 
 	CP	(HL)		; 0317 .	  be 
 	JP	C,H0343		; 0318 .C.	  da 43 03 
+
 	LD	HL,(H03da)	; 031b *..	  2a da 03 
 	LD	H,00H		; 031e &.	  26 00 
 	EX	DE,HL		; 0320 .	  eb 
@@ -352,9 +373,9 @@ H0363: 	LD	A,(H03ce)	; 0363 :..	  3a ce 03
 H0375: 	LD	A,(H03dd)	; 0375 :..	  3a dd 03 
 	RET			; 0378 .	  c9 
 
-H0379: 	LD	E,A		; 0379 _	  5f 
+andw8: 	LD	E,A		; 0379 _	  5f 
 	LD	D,00H		; 037a ..	  16 00 
-H037c: 	LD	A,E		; 037c {	  7b 
+andw16:	LD	A,E		; 037c {	  7b 
 	AND	L		; 037d .	  a5 
 	LD	L,A		; 037e o	  6f 
 	LD	A,D		; 037f z	  7a 
@@ -362,11 +383,17 @@ H037c: 	LD	A,E		; 037c {	  7b
 	LD	H,A		; 0381 g	  67 
 	RET			; 0382 .	  c9 
 
-H0383: 	LD	E,(HL)		; 0383 ^	  5e 
+;
+; right shift 16 indirect (HL) by C into HL
+;
+rsh16i:	LD	E,(HL)		; 0383 ^	  5e 
 	INC	HL		; 0384 #	  23 
 	LD	D,(HL)		; 0385 V	  56 
 	EX	DE,HL		; 0386 .	  eb 
-H0387: 	LD	A,H		; 0387 |	  7c 
+;
+; right shift HL by C
+;
+rsh16: 	LD	A,H		; 0387 |	  7c 
 	OR	A		; 0388 .	  b7 
 	RRA			; 0389 .	  1f 
 	LD	H,A		; 038a g	  67 
@@ -374,10 +401,13 @@ H0387: 	LD	A,H		; 0387 |	  7c
 	RRA			; 038c .	  1f 
 	LD	L,A		; 038d o	  6f 
 	DEC	C		; 038e .	  0d 
-	JP	NZ,H0387	; 038f ...	  c2 87 03 
+	JP	NZ,rsh16	; 038f ...	  c2 87 03 
 	RET			; 0392 .	  c9 
 
-H0393: 	LD	E,A		; 0393 _	  5f 
+;
+; HL -= A
+;
+subw8: 	LD	E,A		; 0393 _	  5f 
 	LD	D,00H		; 0394 ..	  16 00 
 	LD	A,E		; 0396 {	  7b 
 	SUB	L		; 0397 .	  95 
@@ -391,7 +421,8 @@ H039d: 	DB	1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH
 	DB	1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH
 	DB	1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH
 	DB	1AH,1AH,1AH,1AH
-H03c5: 	DW	1A1AH
+
+spsave:	DW	1A1AH		; saved stack pointer and top
 
 ptmp1: 	db	1AH
 ptmp2:	db	1AH
@@ -406,12 +437,18 @@ H03d2: 	DB	1AH
 H03d3: 	DB	1AH
 H03d4: 	DB	1AH
 H03d5:	DB	1AH
-H03d6: 	DW	1A1AH
-H03d8: 	DB	1AH
+
+; holds a 24 bit something
+H03d6: 	DB	1AH		; C	- low
+H03d7: 	DB	1AH		; B	- mid
+H03d8: 	DB	1AH		; E	- hi
+
 H03d9: 	DB	1AH
 H03da:	DB	1AH
 H03db: 	DB	1AH
+
 H03dc: 	DB	1AH
+
 H03dd: 	DB	1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH
 	DB	1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH
 	DB	1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH,1AH

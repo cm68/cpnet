@@ -1,8 +1,6 @@
 	.Z80	; Accept Z80 instruction format
 ; NETDOWN - shutdown CP/NET 1.2 SNIOS and prepare for RESET
 
-	maclib	Z80.LIB
-
 cr	equ	13
 lf	equ	10
 

@@ -1,5 +1,4 @@
 	.Z80	; Accept Z80 instruction format
-	maclib	Z80.LIB
 
 bdos	equ	0005h
 
