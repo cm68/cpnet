@@ -9,3 +9,13 @@ otherwise useless RS-425 serial port.
 https://sites.google.com/a/zen-room.org/home/the-zen-room/mark-iv-wifi
 
 Status:  It's still a bit broken
+
+this work is derived from:
+
+https://github.com/durgadas311/cpnet-z80
+
+and
+
+https://github.com/hperaza/cpnet-server
+
+it differs in that it is all buildable, and it's very compact
