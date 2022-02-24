@@ -24,6 +24,8 @@
 	public	hex4
         public  dprint
 	public	debugf
+	public	cr1
+	public	newline
 
 AT_DEBUG	equ	1
 
@@ -374,6 +376,16 @@ outch:  push    hl
         pop     bc
         pop     de
         pop     hl
+        ret
+;
+; print a character, followed by crlf
+;
+cr1:    call    dprint
+newline:
+        ld      a,cr
+        call    dprint
+        ld      a,lf
+        call    dprint
         ret
 ;
 ; send null terminated string in DE
