@@ -12,7 +12,7 @@
 ;TITLE	NETWORK DISK OPERATING SYSTEM FOR CP/NET SLAVE
 
 	ext	ntwkin, ntwkst, cnftbl, sndmsg, rcvmsg, ntwkbt, cfgtbl
-	ext	hex4,outch
+	ext	hex4,outch,hexdump
 ;
 ;
 ;	EQUATIONS OF DATA
@@ -190,6 +190,14 @@ init:
 	push	de
 	push	bc
 
+	ld	hl,0
+	ld	c,32
+	call	hexdump
+
+	ld	hl,(6)
+	ld	c,32
+	call	hexdump
+	
 	call	ntwkin		; if we return nonzero, unhook
 	or	a
 	jp	nz,unhook
@@ -209,10 +217,15 @@ init:
 	ld	de,upmsg
 	ld	c,pstr
 	call	next
+
+	ld	hl,0
+	ld	c,32
+	call	hexdump
+
 	pop	bc
 	pop	de
 
-	jp	next
+	jp	entry		; let's handle the system call that started us
 
 scbadd:	defb	03Ah, 0		; get an undocumented field.
 

@@ -55,4 +55,5 @@ endlist.com:	endlist.180
 local.com:	local.180
 
 hd: $(OBJECTS)
-	cd ~/src/RomWBW/Source/Images ; rm hd_cpnet.img hd_cpm3.img hd_combo.img  ; make ; sudo dd bs=1024k if=hd_combo.img of=/dev/sdc
+	cd ~/src/RomWBW/Source/Images ; rm hd_cpnet.img hd_cpm3.img hd_combo.img  ; make
+	sudo dd bs=1024k if=$(HOME)/src/RomWBW/Source/Images/hd_combo.img of=/dev/sdc

@@ -7,6 +7,9 @@
 
 	include	mk4.lib
 
+	public	retbuf
+	public	cmdbuf
+
 	extrn	itoa,atoi,strlen,cpdelim
 	extrn	ismatch
 	extrn	strcpy
@@ -20,7 +23,6 @@
 	extrn	outstr
 	extrn	hex2
 	extrn	debugf
-	extrn	retbuf
 	extrn	wificon
 	extrn	srvcon
 	extrn	srvdis
@@ -85,5 +87,8 @@ nocon:	db	'No wifi connection',CR,LF,0
 nosrv:	db	'No server connection',CR,LF,0
 noclo:	db	'Close failed !?',CR,LF,0
 pingf:	db	'Ping failed',CR,LF,0
+
+cmdbuf:	ds	256
+retbuf:	ds	256
 
 	end

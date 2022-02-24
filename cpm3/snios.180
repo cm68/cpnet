@@ -31,6 +31,9 @@
 	public	ntwkin,ntwkst
 	public	CNFTBL,SNDMSG,RCVMSG,NTWKER,NTWKBT,NTWKDN,CFGTBL
 
+	public	retbuf
+	public	cmdbuf
+
 	extrn	espreset
 	extrn	sreset
 	extrn	wrtread
@@ -41,10 +44,14 @@
 	extrn	atoi
 	extrn	delay
 	extrn	retbuf
-	extrn	debugf
 	extrn	strcpy
+
+	extrn	debugf
 	extrn	dprint
 	extrn	hexdump
+	extrn	hex2
+	extrn	cr1
+	extrn	newline
 
 	cseg
 
@@ -94,25 +101,15 @@ active	equ	00010000b	; slave logged in on network
 rcverr	equ	00000010b	; error in received message
 senderr	equ	00000001b	; unable to send message
 
-cmdbuf:	ds	128
-
-;
-; print a character, followed by crlf
-;
-cr1:	call	dprint
-	ld	a,cr
-	call	dprint
-	ld	a,lf
-	call	dprint
-	ret
 ;
 ; NDos calls this to initialize the transport
 ; Network Initialization
 ;
 ntwkin:
+ifdef	DEBUG
 	ld	a,0
 	ld	(debugf),a
-
+endif
 	call	sreset
 	jp	c,initerr
 
@@ -259,11 +256,13 @@ atghdr:	db	'AT+CIPRECVDATA=5',CR,LF,0
 ; +CIPRECVDATA:5,<FMT><DID><SID><FNC><SIZ>CRLFOKCRLF
 
 atget:	db	'AT+CIPRECVDATA=',0
-rlen:	dw	0		; length of payload
-doff:	dw	0		; offset into recv buffer of payload
-hdr:	db	5
+
+orma:	dw	0
 rma:	dw	0		; recv buffer address
-payoff:	dw	0
+
+rlen:	db	0		; length of payload
+doff:	db	0		; offset into recv buffer of payload
+avail:	db	0		; set as side-effect of waitav
 
 rlose:	
 	ld	a,0ffh
@@ -271,50 +270,85 @@ rlose:
 
 rcvmsg:	
 	ld	(rma),bc	; save pointers
-	ld	hl,5
-	add	hl,bc
-	ld	(payoff),hl
+	ld	(orma),bc
 
 	ld	a,5
 	call	waitav
+
+ifdef	DEBUG
 	ld	a,'0'
+endif
 	jr	c,rlose
 
 rhdr:	ld	hl,atghdr	; get the 5 byte header
 	ld	a,25
 	call	atcmd
+ifdef	DEBUG
 	ld	a,'1'
+endif
 	jr	c,rlose
 
-	ld	hl,retbuf+15
-	ld	de,hdr
+ifdef	DEBUG
+	ld	a,'{'		; dump the whole retbuf
+	call	cr1
+	ld	hl,retbuf
+	ld	c,25
+	call	hexdump
+endif
+
+	ld	hl,retbuf+15	; copy out the header
+	ld	de,(rma)
 	ld	bc,5
 	ldir
+	ld	(rma),de
 
-	ld	a,'<'
+ifdef	DEBUG
+	ld	a,'<'		; dump out the header
 	call	cr1
-	ld	hl,hdr
+	ld	hl,(orma)
 	ld	c,5
 	call	hexdump
+endif
 
-	ld	a,(hdr+4)
+	ld	a,(avail)	; subtract the amount we read
+	sub	5
+	ld	(avail),a
+
+ifdef	DEBUG
+	call	hex2
+	call	newline
+endif
+
+	ld	a,(retbuf+19)	; how much payload is needed?
 	inc	a
+	ld	(rlen),a
+
+	;
+	; if it isn't already known to be there from the previous call,
+	; wait for payload to be available
+	;
+
+	ld	l,a
+	ld	a,(avail)
+	cp	l
+	jr	z,rdata
+	jr	nc,rdata
+
+	ld	a,l
 	call	waitav
+ifdef	DEBUG
 	ld	a,'2'
+endif
 	jr	c,rlose
 
 rdata:	ld	hl,atget	; build recv command
 	ld	de,cmdbuf
 	call	strcpy
-	ld	hl,(hdr+4)	; size byte
+	ld	hl,(rlen)	; size byte
 	ld	h,0
-	inc	l
-	ld	(rlen),hl
 	call	itoa
 	add	13+1		; '+CIPRECVDATA:' and ','	
-	ld	h,0
-	ld	l,a
-	ld	(doff),hl
+	ld	(doff),a
 	ld	hl,crlf
 	call	strcpy
 
@@ -328,25 +362,28 @@ rdata:	ld	hl,atget	; build recv command
 	ld	hl,cmdbuf
 	call	atcmd
 
+ifdef	DEBUG
 	ld	a,'3'
-	jr	c,rlose
+endif
+	jp	c,rlose
 
-	ld	hl,hdr		; copy the header
-	ld	de,(rma)
-	ld	b,5
-	ldir
-	
 	ld	hl,retbuf	; point at the payload
-	ld	de,(doff)
+	ld	a,(doff)
+	ld	d,0
+	ld	e,a
 	add	hl,de
-	ld	de,(payoff)
-	ld	bc,(rlen)	; copy it out
-	ldir
+	ld	b,d
+	ld	a,(rlen)
+	ld	c,a
+	ld	de,(rma)
+	ldir			; copy it out
 
-	ld	a,'$'
+	ld	a,'<'
 	call	cr1
-	ld	hl,(rma)
-	ld	bc,(rlen)	
+	ld	hl,(orma)
+	ld	a,(rlen)
+	add	5
+	ld	c,a
 	call	hexdump
 
 	xor	a
@@ -357,12 +394,22 @@ rdata:	ld	hl,atget	; build recv command
 ; this means sending a CIPREVLEN? and waiting for the answer to be
 ; at least what we want.  the size of the read we issue is 19,
 ; big enough for +CIPRECVLEN:0crlfOKcrlf, the minimum returned
+; return the size readable in A.  this could prevent extra polling
 ;
 glen:	db	'AT+CIPRECVLEN?',CR,LF,0	; get socket readable length
-need:	ds	1
+need:	db	0
 
 waitav:
 	ld	(need),a
+
+ifdef	DEBUG
+	ld	a,'?'
+	call	dprint
+	ld	a,(need)
+	call	hex2
+	call	newline
+endif
+	
 	xor	a
 	ld	(retbuf+11),a
 	ld	(retbuf+12),a
@@ -391,6 +438,8 @@ waitl:
 	inc	hl
 	ex	de,hl
 	call	atoi		; get length of available data
+	ld	a,l
+	ld	(avail),a
 	ld	a,(need)
 	cp	l
 	jr	c,wwin		; if more available
@@ -406,6 +455,7 @@ pause1: dec	hl
 	ret
 	
 wlose:
+ifdef	DEBUG
 	push	af
 	ld	a,'%'
 	call	dprint
@@ -417,7 +467,7 @@ wlose:
 	ld	hl,retbuf
 	ld	c,040h
 	call	hexdump
-
+endif
 	scf			; no good answer
 	ret
 
@@ -455,5 +505,8 @@ ntwkdn:				; shutdown server - FNC=254 (no response)
 	ret
 
 	db	'-snios end-',0
+
+cmdbuf:	ds	256
+retbuf:	ds	256
 
 	end
