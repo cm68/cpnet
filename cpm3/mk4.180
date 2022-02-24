@@ -50,12 +50,14 @@
 	public	setbaud
 	public	sreset
 	public	flushi
-	public	retbuf
 	public	wificon
 	public	srvcon
 	public	srvdis
 	public	srvping
 	public	delay
+
+	extrn	retbuf
+	extrn	cmdbuf
 
 	extrn	outch
 	extrn	ismatch
@@ -65,13 +67,19 @@
 	extrn	cpdelim
 	extrn	atcmd
 	extrn	ckok
+ifdef	DEBUG
 	extrn	dprint
-	extrn	debugf
+endif
 
+ifdef	DEBUG
 spew	macro	ch
 	ld	a,ch
 	call	dprint
 	endm
+else
+spew	macro	ch
+	endm
+endif
 
 USE_180	equ	1
 
@@ -369,7 +377,7 @@ sreset:
 ;
 STIME	equ	0ffh
 
-flushi:	debug	'f'
+flushi:	spew	'f'
 flir:	ld	b,STIME
 flil: 	getstat	
 	and	rxrdy
@@ -397,10 +405,6 @@ pass:	ds	20		;      password
 host:	ds	20		; cp/net server
 port:	ds	5		;      port
 
-cmdbuf:	ds	256
-sndbuf:	ds	256
-retbuf:	ds	256
-
 retry:	db	3
 mode:	db	0
 
@@ -420,7 +424,7 @@ cfrd:	db	'AT+SYSFLASH=2,"mqtt_cert",0,100',CR,LF,0
 ; set A to 2 to attempt to connect to host
 
 espreset:
-	debug	'r'
+	spew	'r'
 	ld	(mode),a
 
 	ld	a,(retry)
@@ -494,7 +498,7 @@ rlose:	ld	a,1
 	;
 	; let's parse the configuration
 	;
-cfok:	debug	'm'
+cfok:	spew	'm'
 	ld	hl,retbuf+14+8+1	
 	ld	de,ssid		; get ssid
 	call	cpdelim
@@ -524,14 +528,14 @@ wific:	db	'AT+CWJAP=',0
 wifis:	db	'AT+CWSTATE?',CR,LF,0
 
 wificon::
-	debug	'w'
+	spew	'w'
 	;
 	; the connect command gets a bunch of stuff back after a while
 	; 
 	; WIFI CONNECTEDcrlf
 	; WIFI GET IPcrlf
 	;
-	ld	de,sndbuf	; let's connect
+	ld	de,cmdbuf	; let's connect
 	ld	hl,wific
 	call	strcpy
 	ld	hl,ssid
@@ -543,7 +547,7 @@ wificon::
 	ld	hl,crlf
 	call	strcpy
 	ld	a,7
-	ld	hl,sndbuf
+	ld	hl,cmdbuf
 	call	atcmd
 	jr	c,gag
 	;
@@ -554,7 +558,7 @@ wificon::
 
 	ld	b,4
 	
-cloop:	debug	'P'
+cloop:	spew	'P'
 	push	bc
 	ld	hl,wifis	; +CWSTATE:?,<ssid>CRLF
 	ld	a,12
@@ -568,17 +572,17 @@ cloop:	debug	'P'
 	call	delay
 	djnz	cloop
 
-gag:	debug	'u'
+gag:	spew	'u'
 	scf
 	ret
 	
-conok:	debug	'c'
+conok:	spew	'c'
 	xor	a
 	ret
 ;
 ; delay HL seconds
 ;
-delay:	debug	'd'
+delay:	spew	'd'
 	push	bc
 	ld	h,l
 	ld	l,0
@@ -599,15 +603,15 @@ rli:    ex      (sp),hl
 ;
 pingrq:	db	'AT+PING=',0
 
-srvping:debug	'p'
+srvping:spew	'p'
 	ld	hl,pingrq 	; 'AT+PING='
-	ld	de,sndbuf
+	ld	de,cmdbuf
 	call	strcpy
 	ld	hl,host		; host from config flash
 	call	strcpy
 	ld	hl,crlf
 	call	strcpy	
-	ld	hl,sndbuf	; +PING:TIMEOUTcrlf or PING:<x>crlf
+	ld	hl,cmdbuf	; +PING:TIMEOUTcrlf or PING:<x>crlf
 	ld	a,9
 	call	atcmd
 	ld	a,(retbuf+6)
@@ -626,9 +630,9 @@ conrq:	db	'AT+CIPSTART="TCP",',0
 conmdr:	db	'AT+CIPRECVMODE=1',CR,LF,0
 conmdt:	db	'AT+CIPMODE=0',CR,LF,0
 
-srvcon:	debug	'C'
+srvcon:	spew	'C'
 	ld	hl,conrq	; build the connect command
-	ld	de,sndbuf
+	ld	de,cmdbuf
 	call	strcpy
 	ld	hl,host		; add host
 	call	strcpy
@@ -639,7 +643,7 @@ srvcon:	debug	'C'
 	ld	hl,crlf
 	call	strcpy
 
-	ld	hl,sndbuf
+	ld	hl,cmdbuf
 	ld	a,13
 	call	atcmd
 	jr	c,losec
@@ -654,11 +658,11 @@ srvcon:	debug	'C'
 	call	atcmd
 	jr	c,losec
 
-	debug	'S'
+	spew	'S'
 	xor	a
 	ret
 
-losec:	debug	'L'
+losec:	spew	'L'
 	scf
 	ret
 
