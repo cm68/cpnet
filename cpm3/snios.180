@@ -1,4 +1,3 @@
-	.Z80	; Accept Z80 instruction format
 	title	'ESP AT'
 
 ;/*
@@ -98,6 +97,15 @@ senderr	equ	00000001b	; unable to send message
 cmdbuf:	ds	128
 
 ;
+; print a character, followed by crlf
+;
+cr1:	call	dprint
+	ld	a,cr
+	call	dprint
+	ld	a,lf
+	call	dprint
+	ret
+;
 ; NDos calls this to initialize the transport
 ; Network Initialization
 ;
@@ -181,6 +189,12 @@ sndmsg0:
 	add	a,6		; 5 for header, plus 0 means 1.
 	ld	(wlen),a
 
+	ld	a,'>'
+	call	cr1
+	ld	hl,(wma)
+	ld	bc,(wlen)
+	call	hexdump
+
 	ld	hl,atput	; build command
 	ld	de,cmdbuf
 	call	strcpy
@@ -217,7 +231,8 @@ sndmsg0:
 	xor	a
 	ret
 
-slose:	ld	a,0ffh
+slose:	
+	ld	a,0ffh
 	ret
 
 ;
@@ -229,100 +244,170 @@ slose:	ld	a,0ffh
 ; that is necessitated by the AT command
 ; we are called with BC pointing at the NDOS header plus expected
 ; payload.
-
+;
+; NB: there seem to be short reads happening, which don't comport
+; with what we need. I will avoid this by issuing 2 requests:
+; one for exactly the header of 5 bytes, and once I get that,
+; one for exactly the read length I expect.  this means no timeouts
+; or short reads
 ;
 ; AT literal command fragments and expected responses
 ; responses are null-terminated
 ;
-glen:	db	'AT+CIPRECVLEN?',CR,LF,0	; get socket readable length
+atghdr:	db	'AT+CIPRECVDATA=5',CR,LF,0
+; response will be exactly 25 bytes
+; +CIPRECVDATA:5,<FMT><DID><SID><FNC><SIZ>CRLFOKCRLF
+
 atget:	db	'AT+CIPRECVDATA=',0
-avlen:	dw	0				; how much we can read
-dlen:	db	0				; length of our count
-rma:	dw	0				; recv buffer address
-rlen:	dw	0
+rlen:	dw	0		; length of payload
+doff:	dw	0		; offset into recv buffer of payload
+hdr:	db	5
+rma:	dw	0		; recv buffer address
+payoff:	dw	0
+
+rlose:	
+	ld	a,0ffh
+	ret
 
 rcvmsg:	
-	ld	(rma),bc	; send poll command
+	ld	(rma),bc	; save pointers
+	ld	hl,5
+	add	hl,bc
+	ld	(payoff),hl
 
-rpoll:	ld	hl,glen
-	ld	de,cmdbuf
-	call	strcpy
-
-	ld	hl,cmdbuf
-	ld	a,16		; all we are interested in
-	call	atcmd
+	ld	a,5
+	call	waitav
 	ld	a,'0'
-	jp	c,rlose
+	jr	c,rlose
 
-	ld	hl,retbuf+11	; +CIPRECVLEN:<int>,<int>...crlf
-	ld	a,':'
-	cp	(hl)
-	jp	nz,rwait
-	inc	hl
-	ex	de,hl
-	call	atoi		; get length of available data
-	ld	(avlen),hl
-	ld	a,h
-	or	a
+rhdr:	ld	hl,atghdr	; get the 5 byte header
+	ld	a,25
+	call	atcmd
+	ld	a,'1'
+	jr	c,rlose
+
+	ld	hl,retbuf+15
+	ld	de,hdr
+	ld	bc,5
+	ldir
+
+	ld	a,'<'
+	call	cr1
+	ld	hl,hdr
+	ld	c,5
+	call	hexdump
+
+	ld	a,(hdr+4)
+	inc	a
+	call	waitav
 	ld	a,'2'
-	jr	nz,rlose
-	ld	a,l
-	cp	6		; shortest possible packet
-	jr	nc,rdata
-rwait:	ld	hl,08000h
-wl:	dec	hl
-	ld	a,h
-	or	l
-	jr	nz,wl
-	jr	rpoll
+	jr	c,rlose
 
 rdata:	ld	hl,atget	; build recv command
 	ld	de,cmdbuf
 	call	strcpy
-	ld	hl,(avlen)
+	ld	hl,(hdr+4)	; size byte
+	ld	h,0
+	inc	l
+	ld	(rlen),hl
 	call	itoa
-	ld	(dlen),a
+	add	13+1		; '+CIPRECVDATA:' and ','	
+	ld	h,0
+	ld	l,a
+	ld	(doff),hl
 	ld	hl,crlf
 	call	strcpy
 
-	ld	hl,(avlen)
-	ld	a,(dlen)
-	add	13+1		; '+CIPRECVDATA:' and ','
+	; response will be exactly:
+	; +CIPRECVDATA:<len>,<data>CRLFOKCRLF
+	;
+	ld	a,(rlen)
+	ld	hl,(doff)
 	add	l		; and how much data expected
-	add	4		; OKcrlf
+	add	6		; tail: crlfOKcrlf
 	ld	hl,cmdbuf
 	call	atcmd
+
 	ld	a,'3'
 	jr	c,rlose
 
-	ld	hl,retbuf	; find the payload
-rsrch:	ld	a,(hl)
-	inc	hl
-	cp	','		; it's after the comma
-	jr	nz,rsrch
-
-	ld	de,4
-	ex	de,hl
-	add	hl,de
-	ld	c,(hl)
-	ld	b,0
-	inc	bc
-	ld	(rlen),bc
-	ex	de,hl
+	ld	hl,hdr		; copy the header
 	ld	de,(rma)
+	ld	b,5
+	ldir
+	
+	ld	hl,retbuf	; point at the payload
+	ld	de,(doff)
+	add	hl,de
+	ld	de,(payoff)
+	ld	bc,(rlen)	; copy it out
 	ldir
 
-	if	0
+	ld	a,'$'
+	call	cr1
 	ld	hl,(rma)
 	ld	bc,(rlen)	
 	call	hexdump
-	endif
 
 	xor	a
 	ret
 
-rlose:	push	af
-	ld	a,'@'
+;
+; poll until the receiver has at least A bytes available.
+; this means sending a CIPREVLEN? and waiting for the answer to be
+; at least what we want.  the size of the read we issue is 19,
+; big enough for +CIPRECVLEN:0crlfOKcrlf, the minimum returned
+;
+glen:	db	'AT+CIPRECVLEN?',CR,LF,0	; get socket readable length
+need:	ds	1
+
+waitav:
+	ld	(need),a
+	xor	a
+	ld	(retbuf+11),a
+	ld	(retbuf+12),a
+waitl:
+	ld	hl,glen		; how much do you got?
+	ld	c,16
+	ld	a,19
+	call	atcmdl
+	ld	a,'0'
+	jr	c,wlose
+
+	;
+	; due to the silly AT "passive" protocol having async notifications
+	; if data movement, we might get silly +IPD messages or SEND OK
+	; if so, then it won't look like the expected recv len response
+	; just retry in this case
+	;
+	ld	hl,retbuf+11	; +CIPRECVLEN:<int>,<int>...crlf
+	ld	a,':'
+	cp	(hl)
+	jp	nz,waitl	; not what we expected
+
+	;
+	; got an answer, see if it's enough
+	;
+	inc	hl
+	ex	de,hl
+	call	atoi		; get length of available data
+	ld	a,(need)
+	cp	l
+	jr	c,wwin		; if more available
+	jr	z,wwin		; if just enough
+
+	ld	hl,1024
+pause1: dec	hl
+	ld	a,h
+	or	l
+	jr	nz,pause1	
+
+	jr	waitl
+	ret
+	
+wlose:
+	push	af
+	ld	a,'%'
 	call	dprint
 	pop	af
 	call	dprint
@@ -332,9 +417,13 @@ rlose:	push	af
 	ld	hl,retbuf
 	ld	c,040h
 	call	hexdump
-	ld	a,0ffh
+
+	scf			; no good answer
 	ret
-	
+
+wwin:	xor	a
+	ret
+
 ntwker:
 ntwrkerror:
 
@@ -364,5 +453,7 @@ ntwkdn:				; shutdown server - FNC=254 (no response)
 	call	sndmsg0		; avoid active check
 	xor	a
 	ret
+
+	db	'-snios end-',0
 
 	end

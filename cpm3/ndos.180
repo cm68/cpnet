@@ -11,8 +11,8 @@
 
 ;TITLE	NETWORK DISK OPERATING SYSTEM FOR CP/NET SLAVE
 
-	public	next
 	ext	ntwkin, ntwkst, cnftbl, sndmsg, rcvmsg, ntwkbt, cfgtbl
+	ext	hex4,outch
 ;
 ;
 ;	EQUATIONS OF DATA
@@ -34,7 +34,7 @@ sctlng	equ	128		;ONE SECTOR LENGTH
 ;
 ccndin	equ	3		;CONSOLE INPUT WITH DEVICE CODE
 ccndot	equ	4		;CONSOLE OUTPUT WITH DEVICE CODE
-cbufpr	equ	9		;BUFFER PRINT
+pstr	equ	9		;BUFFER PRINT
 crdbuf	equ	10		;READ BUFFER
 cconst	equ	11		;GET CONSOLE STATUS
 cgetvr	equ	12		;GET VERSION NUMBER
@@ -100,31 +100,29 @@ fcbrr0	equ	33		; offset of RR0 field in FCB (not FCB in MSG)
 
 scbase	equ	09Ch		; base address of SCB within page
 
-	org	0
+;
+; RSX Prefix - this is relocated to the first page of the RSX
+; and patched by the rsx loader to point at our code
+; we in turn patch the start address to reflect our state machine
+; initially, it's the init function, then after this is successful,
+; it's the interceptor, and then ?
+;
 
-;	RSX Prefix
-serial:	defb	0,0,0,0,0,0
-start:	jp	coldst
-next:	jp	0
-prev:	defw	0
-remove:	defb	0		; 0ffh for remove
-nonbank:
+serial:	db	0,0,0,0,0,0	; 6 bytes of serial number
+start:	jp	init		; jump to our code 
+next:	jp	0		; jump to bdos or inner rsx
+prev:	dw	0		; prev module
+remove:	db	0		; 0ffh for remove
+nonbank:db	0		; nonbank flag
+rsxnam:	db	'NDOS    '	; 8 chars of rsx name
+loader:	db	0		; loader flag
+	db	0,0		; reserved
 
-	defb	0
-rsxnam:	defb	'NDOS3   '
-loader:	defb	0,0,0
+        db      'COPYRIGHT (C) 1980-82, DIGITAL RESEARCH '
+        db      0,0,0,0,0,0
 
-ioport:	defb	018h		; could be patched here
-
-	defb	'COPYRIGHT (C) 1980-82, DIGITAL RESEARCH '
-	defb	0,0,0,0,0,0
-
-nderrm:	defb	cr,lf,'NDOS Err $'
-nderr2:	defb	', Func $'
-
-bdose:	defw	0
-cursid:	defb	0
-scbadr:	defw	0
+cursid:	db	0
+scbadr:	dw	0
 
 msgtop:	defb	0
 msgid:	defb	0
@@ -146,7 +144,7 @@ msgdat:	defs	256
 stack:	defs	0
 
 ustack:	defw	0
-funcod:	defb	0
+funcod:	db	0		; our system call number
 paramt:	defw	0
 retcod:	defb	0
 mcrpnt:	defw	0
@@ -155,13 +153,23 @@ f5setf:	defb	0
 fntmpf:	defb	0
 orgbio:	defw	0
 
-hexmsg:	defb	0,0,'$'
+errmsg:	db	cr,lf,'NDOS Err $'
+ertail:	db	', Func $'
 
-clderr:	defb	'Init err$'
+lderrm:	db	'NDOS Failed.',cr,lf,'$'
+upmsg:	db	'NDOS Started.',cr,lf,'$'
+cstdn:	db	'NDOS Ending.',cr,lf,'$'
+wbmsg:	db	'NDOS Warm-boot.',CR,LF,'$'
 
-coldse:				; BC and DE are pushed...
-	ld	de,clderr
-	ld	c,cbufpr
+hexmsg:	db	0,0,'$'
+
+;
+; if we come here, there is a pending system call on the stack.
+; first we complain, then we call it
+;
+unhook:				; BC and DE are pushed...
+	ld	de,lderrm	; complain
+	ld	c,pstr
 	call	next
 	ld	hl,next
 	ld	(start+1),hl	; only until remove takes place...
@@ -169,34 +177,44 @@ coldse:				; BC and DE are pushed...
 	ld	(remove),a
 	pop	bc
 	pop	de
-	jp	next		; pass to BDOS and hope for the best...
+	jp	start
+;
+; initialize the network and plug ourself in to intercept bdos calls
+; this happens at the first system call after the rsx gets loaded.
+;
+init:
+	ld	a,c		; not sure how this works
+	cp	scbf
+	jp	z,next
 
-; Not a true cold start - we are in context of a valid BDOS call...
-coldst:
 	push	de
 	push	bc
-	call	ntwkin
+
+	call	ntwkin		; if we return nonzero, unhook
 	or	a
-	jp	nz,coldse
-	ld	hl,ndose
+	jp	nz,unhook
+
+	ld	hl,entry	; we're good to go, let's hook
 	ld	(start+1),hl
-	xor	a		;
-	ld	(remove),a	; is the required?
+	xor	a
+	ld	(remove),a
 	ld	hl,msgdat
 	ld	(mcrpnt),hl
-	; Apparently, it is passe to use BDOS calls for certain things...
-	ld	de,scbadd
+
+	ld	de,scbadd	; read scb 0x3 to A
 	ld	c,scbf
 	call	next
-	ld	(scbadr),hl
-	ld	de,cstup
-	ld	c,cbufpr
+
+	ld	(scbadr),hl	; hi, I'm up
+	ld	de,upmsg
+	ld	c,pstr
 	call	next
 	pop	bc
 	pop	de
+
 	jp	next
 
-scbadd:	defb	03Ah, 0
+scbadd:	defb	03Ah, 0		; get an undocumented field.
 
 bdermd:	ld	hl,(scbadr)
 	ld	l,scbase+4Bh
@@ -243,11 +261,10 @@ dmaadd:	ld	hl,(scbadr)
 	ld	l,a
 	ret
 
-cstup:	defb	'NDOS3 Started.',cr,lf,'$'
-cstdn:	defb	'NDOS3 Ending.',cr,lf,'$'
-;wbmsg:	DB	'NDOS3 Warm-boot.',CR,LF,'$'
-
-ndose:
+;
+; our actual interceptor
+;
+entry:
 	ld	a,c		; must save REAL function code!
 	ld	(funcod),a
 	ld	(msgfun),a
@@ -330,6 +347,9 @@ ndose6:
 	ex	de,hl
 	jp	(hl)
 
+;
+; bdos function table
+;
 funtb3:
 	defw	0		; 0	000h	080h - never called
 	defw	sndhdr		; 2	002h	082h
@@ -1104,12 +1124,12 @@ rcvec:
 
 nderr:
 	push	de
-	ld	de,nderrm
+	ld	de,errmsg
 	call	prmsg
 	pop	af		; A = (D), ext err code
 	push	af		; Fix bug in NDOS.ASM
 	call	hexout
-	ld	de,nderr2
+	ld	de,ertail
 	call	prmsg
 	ld	a,(funcod)
 	call	hexout
@@ -1131,7 +1151,7 @@ hexout:
 	dec	de		; back to hi nibble
 	call	hexdig
 prmsg:
-	ld	c,cbufpr
+	ld	c,pstr
 	jp	next
 
 gtfcb:
@@ -1542,7 +1562,7 @@ calrsx:
 	ld	d,(hl)
 	ld	hl,rsxnam
 	ld	b,8
-rsxf0:				; Compare paramter to our name
+rsxf0:				; Compare parameter to our name
 	ld	a,(de)
 	cp	(hl)
 	jp	nz,rsxf1
@@ -1554,7 +1574,7 @@ rsxf1:
 	pop	de
 	jp	nz,next
 	ld	de,cstdn
-	ld	c,cbufpr
+	ld	c,pstr
 	call	next
 	ld	hl,next
 	ld	(start+1),hl	; only until remove takes place...
@@ -1565,4 +1585,3 @@ rsxf1:
 	ret
 
 	end
-	

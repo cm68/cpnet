@@ -3,7 +3,7 @@ SNIOSOBJ = snios.rel $(ESPOBJ)
 
 BROKEN = ntpdate.com
 
-COMFILES = ndos.com espconf.com esptest.com \
+COMFILES = ndosld.com ndos.com espconf.com esptest.com \
 	rsxrm.com rsxls.com tpa.com tr.com \
 	netstat.com netdown.com ntpdate.com \
 	local.com \
@@ -27,17 +27,16 @@ esptest.com:	esptest.rel $(ESPOBJ)
 espconf.com:	espconf.rel $(ESPOBJ)
 	$(ZXCC) $(TOOLS)/cpm/bin/LINK espconf=espconf,$(ESP)[oc]
 
-ndos.prl:	ndos.rel $(SNIOSOBJ)
-	$(ZXCC) $(TOOLS)/cpm/bin/LINK ndos=ndos,snios,$(ESP)[op]
+ndosld.com:	ndosld.180
+
+ndos.rsx:	ndos.rel $(SNIOSOBJ)
+	$(ZXCC) $(TOOLS)/cpm/bin/LINK -ndos.rsx=ndos.rel,snios,$(ESP)[op]
 
 ndos.rel:	ndos.180
 
-ndos.rsx:	ndos.prl
-	cp ndos.prl ndos.rsx
-
-ndos.com:	ndos.rsx
-	rm -f ndos.com
-	$(ZXCC) $(TOOLS)/cpm/bin/GENCOM -NDOS -[NULL]
+ndos.com:	ndos.rsx ndosld.com
+	cp ndosld.com ndos.com
+	$(ZXCC) $(TOOLS)/cpm/bin/GENCOM -NDOS -ndos.rsx
 
 %.com: %.180
 	$(ZXCC) $(TOOLS)/cpm/bin/SLR180 -$(basename $?)/A
@@ -56,4 +55,4 @@ endlist.com:	endlist.180
 local.com:	local.180
 
 hd: $(OBJECTS)
-	cd ../Images ; rm hd_cpnet.img hd_cpm3.img hd_combo.img  ; make ; sudo dd if=hd_combo.img of=/dev/sdc
+	cd ~/src/RomWBW/Source/Images ; rm hd_cpnet.img hd_cpm3.img hd_combo.img  ; make ; sudo dd bs=1024k if=hd_combo.img of=/dev/sdc

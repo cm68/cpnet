@@ -124,6 +124,7 @@ atoin:	ld	a,(de)
 ; take integer in HL and put it into decimal string at DE
 ; return A as number of characters stored
 ; return with DE pointing past string
+; side effect; return with HL == 0
 ;
 itoa:	exx
 	ld	de,'0'		; leading '0' and digit count 0
@@ -384,29 +385,35 @@ outstr: ld      a,(de)
         inc     de
         jr      outstr
 
+s_bc:	dw	0
+s_de:	dw	0
+s_hl:	dw	0
+s_bc2:	dw	0
+s_de2:	dw	0
+s_hl2:	dw	0
+s_a2:	db	0
+
 dprint:
-        push    bc
-        push    de
-        push    hl
+	ld	(s_bc),bc
+	ld	(s_de),de
+	ld	(s_hl),hl
+	exx
+	ld	(s_bc2),bc
+	ld	(s_de2),de
+	ld	(s_hl2),hl
         ld      bc,0100h
         ld      e,a
-        exx
-        ex      af,af'
-        push    af
-        push    bc
-        push    de
-        push    hl
-        exx
         rst	8
-        exx
-        pop     hl
-        pop     de
-        pop     bc
-        pop     af
-        ex      af,af'
-        exx
-        pop     hl
-        pop     de
-        pop     bc
+	ld	bc,(s_bc2)
+	ld	de,(s_de2)
+	ld	hl,(s_hl2)
+	exx
+	ld	bc,(s_bc)
+	ld	de,(s_de)
+	ld	hl,(s_hl)
         ret
+
+        db      '-atlib end-',0
+
+	end
 

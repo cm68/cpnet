@@ -68,6 +68,13 @@
 	extrn	dprint
 	extrn	debugf
 
+spew	macro	ch
+	ld	a,ch
+	call	dprint
+	endm
+
+USE_180	equ	1
+
 	ifdef USE_180
 
 getstat	macro
@@ -155,10 +162,11 @@ putctla:push	bc
 ; trashes both banks
 ;
 WRTIME	equ	0ffffh
-WRTIME1	equ	00004h
+WRTIME1	equ	00001h
 
 wrtread:
-	debug	'W'
+	; spew	'W'
+
 	call	flushi		; clear the decks
 	push	de
 	exx
@@ -170,50 +178,67 @@ wrtread:
 	call	lddesc		; get send descriptor
 	ld	b,a
 
-w_wlp:	ld	a,b		; anything to send?
-	or	a
-	jr	z,w_rlp		; guess not
+	;
+	; B is the send counter, C is the recv counter
+	;
+w_wlp:	xor	a		; anything to send?
+	or	b
+	jr	z,w_rlp		; if not, do read side
 
-	getstat
+w_wtry:	getstat
 	and	txrdy
 	jr	z,w_rlp
 	ld	a,(hl)		; send a byte
 	inc	hl
 	puttx
-	djnz	w_rlp
+	dec	b
+	jr	nz,w_rlp	; go to read side
 
 	call	lddesc		; get next send descriptor
-	or	a		; did we finish writing?
 	ld	b,a
-	jr	nz,w_rlp
+	jr	nc,w_rlp	; not done, but do read side
+
 	or	c		; check if we have recv'd everything too
 	jr	z,wrdone		
-	debug	'T'
-	ld	hl,WRTIME
-	ld	de,WRTIME1
 
+	;
+	; in order to get here, we have just exhausted the write side, and
+	; the read side still has space. let's initialize a timer.
+	; the timer is only valid if B is zero.
+	;	
+	; spew	'T'
+
+	ld	hl,1
+	ld	de,3
+
+	;
+	; this "cannot" ever loop forever between w_wlp and w_rlp because when the
+	; transmit side went to zero, we checked if the recv side was zero.
+	;
 w_rlp:	xor	a		; check if we have recv space
 	or	c
 	jr	z,w_wlp
 
 w_rchk:	getstat
 	; and	rxovr
-	bit	6,a
+	bit	6,a		; check for receiver overrun
 	jr	nz,w_rovr	; oh, poo!
 	;getstat
 	;and	rxrdy
-	bit	7,a
+	bit	7,a		; is there a character to read?
 	jr	nz,w_rcv	; if so, go get it
 
-	xor	a
-	or	b		; if transmitter empty, check timer
-	jr	nz,w_wlp
+	xor	a		; if transmitter still has work,
+	or	b
+	jr	nz,w_wlp	; hop to it.
 
 	dec	hl		; 32 bit counter!
 	ld	a,h
 	or	l
 	jr	nz, w_rchk
-	debug	't'
+
+	; spew	't'
+
 	dec	de
 	ld	a,d
 	or	e
@@ -221,48 +246,52 @@ w_rchk:	getstat
 	jr	wtimeout
 
 w_rcv:	getrx			; read a byte
-	dec	c		; bump our recv count
 	exx
 	ld	(hl),a		; store the byte
 	inc	hl
-	; jr	z,w_rnoz	; null terminate
 	ld	(hl),0
-
-w_rnoz:	exx
-	jr	nz,w_wlp	; if recv count
+	exx
+	dec	c		; bump our recv count
+	jr	nz,w_wlp	; go to the write side
 	
 	exx
 	call	lddesc		; get next recv descriptor
 	exx
-
-	ld	c,a		; are we done?
+	ld	c,a
+	jr	nc,w_wlp
 	or	b
 	jr	nz,w_wlp
 
 wrdone: call	flushi
-	debug	'D'
+
+	; spew	'D'
+	
 	xor	a
 	ret
 
 wtimeout:
 	exx
+	xor	a
 	ld	(hl),a		; null terminate input buffer
 	exx
 	inc	a
-	debug	'X'
+
+	; spew	'X'
+
 	scf
 	ret
 w_rovr:
 	call	flushi
-	debug	'V'
-	xor	a
+
+	; spew	'V'
+
 	dec	a
 	ret
 ;
 ; load i/o vector segment
 ; descriptor pointer in DE
 ; don't increment past end of array
-; return count in A
+; return count in A, carry if zero
 ;
 lddesc: ex	de,hl		; descriptor in hl
 	ld	a,(hl)		; count in b
@@ -274,6 +303,9 @@ lddesc: ex	de,hl		; descriptor in hl
 	ld	d,(hl)
 	inc	hl
 ldfin:	ex	de,hl		; buffer in hl
+	or	a
+	ret	nz
+	scf
 	ret
 ;
 ; change the baud rate to HL * 100
@@ -439,6 +471,14 @@ eloop:	dec     hl
 	ld	a,14+100+6	; +SYSFLASH:100,<data>crlfOKcrlf
 	call	atcmd
 
+	ld	a,(retbuf+9)	; we need a ':'
+	cp	':'
+	jr	nz,rlose
+
+	ld	a,(mode)
+	or	a
+	ret	z		; mode == 0, only initialize
+
 	ld	hl,retbuf+14+8	; end of magic number
 	ld	(hl),0
 
@@ -447,7 +487,7 @@ eloop:	dec     hl
 	call	ismatch
 	jr	z,cfok		; if we found it, all good
 
-	ld	a,1
+rlose:	ld	a,1
 	scf
 	ret
 
@@ -470,9 +510,6 @@ cfok:	debug	'm'
 	call	atcmd
 	call	ckok
 
-	ld	a,(mode)
-	or	a
-	ret	z		; mode == 0, only initialize
 	call	wificon		; mode == 1, connect to wifi
 	ret	c
 
@@ -638,3 +675,7 @@ srvdis:
 
 	scf
 	ret
+
+	db	'-mk4 end-',0
+
+	end
