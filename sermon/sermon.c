@@ -4,6 +4,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <termios.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <termios.h>
 #include <fcntl.h>
 
 int
@@ -44,6 +47,33 @@ main(int argc, char **argv)
 	col = 0;
 
 	while (1) {
+		int bytes;
+		fd_set infds;
+
+		FD_ZERO(&infds);
+		FD_SET(0, &infds);
+		FD_SET(fd, &infds);
+
+		if (select(fd+1, &infds, 0, 0, 0) < 0) {
+			perror("select");
+			exit(-5);
+		} 
+		if (ioctl(0, FIONREAD, &bytes) < 0) {
+			perror("FIONREAD");
+			exit(-4);
+		}
+		if (bytes > 0) {
+			char trash[1000];
+
+			read(0, trash, 100);
+			system("clear");
+		}
+		if (ioctl(fd, FIONREAD, &bytes) < 0) {
+			perror("FIONREAD");
+			exit(-4);
+		}
+		if (bytes == 0) continue;
+
 		i = read(fd, &c, 1);
 		if (i != 1) continue;			
 		ca[col] = c;
