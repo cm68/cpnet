@@ -1,0 +1,47 @@
+; Generic initialization code for NDOS.
+;
+
+cr	equ	13
+lf	equ	10
+
+; System page-0 constants
+cpm	equ	0
+bdos	equ	5
+
+; BDOS functions
+print	equ	9
+
+	; RSX might be linked-in; let's check
+
+	org	100h
+	ld	sp,stack
+
+	ld	de,ldmsg
+	ld	c,print
+	call	bdos
+
+	ld	ix,(bdos+1)	; get the bdos jump address
+	ld	de,-7
+	add	ix,de		; now should be rsx header
+
+dup1:
+	ld	a,(ix+24)	; loader flag?
+	cp	0FFh
+	jp	z,lfound
+
+	ld	l,(ix+10)	; next RSX...
+	ld	h,(ix+11)	;
+	push	hl
+	pop	ix
+	jp	dup1
+
+lfound:
+	jp	cpm		; let RSX init itself
+
+ldmsg:	db	'NDOS loader',cr,lf,'$'
+nondos:	db	'NDOS not loaded',cr,lf,'$'
+
+	defs	64
+stack:	defs	0
+
+	end

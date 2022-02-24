@@ -1,2 +1,7 @@
 *.rsx
+*.com
+*.COM
 *.prl
+*.sym
+*.lst
+*.rel
