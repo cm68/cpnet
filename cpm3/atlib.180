@@ -1,4 +1,3 @@
-;
 ; subroutine library for AT command set
 ;
 	include	mk4.lib
@@ -126,11 +125,10 @@ atoin:	ld	a,(de)
 ; take integer in HL and put it into decimal string at DE
 ; return A as number of characters stored
 ; return with DE pointing past string
-; side effect; return with HL == 0
 ;
-itoa:	exx
-	ld	de,'0'		; leading '0' and digit count 0
-	exx
+itoa:	push	de
+	pop	ix
+	ld	de,'0'		; E = '0', D = 0
 	ld	bc,-10000
 	call	Num1
 	ld	bc,-1000
@@ -141,33 +139,31 @@ itoa:	exx
 	call	Num1
 	ld	c,-1
 	call	Num1
-	exx	
-	ld	a,d
-	exx
+	ld	a,d		; digit count
 	or	a
-	ret	nz
-	inc	de
+	jr	nz,itdone	; only ones digit
+	inc	ix
 	inc	a
+itdone:
+	push	ix
+	pop	de
 	ret 
 
-Num1:	ld	a,'0'-1
+Num1:	ld	a,'0'-1		; starting point is negative
 Num2:	inc	a
 	add	hl,bc
 	jr	c,Num2
-	sbc	hl,bc
+	sbc	hl,bc		; restore for overshoot
 
-putd:	ld	(de),a		; store digit
-	exx
-	or	e		; or in already digits
+putd:	ld	(ix+0),a	; store digit. 
+	or	e		; this accumulates bits
 	ld	e,a
 	sub	'1'		; any of them > '0' carry if no
-	jr	c,noput
-	inc	d
-	exx
-	inc	de
+	ret	c		; nothing output, leading zero.
+	inc	d		; digit count
+	inc	ix		; pointer
 	ret
-noput:	exx
-	ret
+
 
 aok:    db      CR,LF,'OK',CR,LF,0
 
@@ -178,84 +174,84 @@ ckok:   ld      hl,retbuf
         ld      de,aok
         jp      ismatch
 
-ss_wlen:db      0
-ss_wbuf:dw      0
-        db      0
+;
+; mild hack alert:  we use the scatter/gather stuff to get around the
+; mechanism of wrtread not having 16 bit segment lengths.
+; so, if we want to write 256 bytes and get 266 bytes back,
+; we'll need 4 segments, 2 for write of 255, 1 and 2 for read of 255,10.
 
-ss_rlen:db      0
-ss_rbuf:dw      retbuf
-        db      0
+;
+; given a buffer address in HL, length in BC, and pointer in IX
+; build a descriptor array.
+; trashes IX, BC, HL, A
+;
+blddesc:
+	ld	(ix+0),c
+	ld	(ix+1),l
+	ld	(ix+2),h
+	ld	(ix+3),0
+	ld	a,b		; 256 is too big for one segment
+	or	a
+	ret	z
+
+	ld	(ix+0),255	; max segment size
+	inc	h		; HL += 255 (HL += 256 ; HL -= 1)
+	dec	hl
+	inc	bc		; BC -= 255 (BC -= 256 ; BC += 1)
+	dec	b
+	inc	ix		; IX += 3
+	inc	ix
+	inc	ix
+	jr	blddesc
+
+wdesc:
+	db      0		; write segment 0
+	dw      0
+	db      0		; write segment 1
+	dw      0
+        db      0		; terminator
+
+rdesc:	db	0		; read segment 0
+	dw	0
+	db	0		; read segment 1
+	dw	0
+	db	0		; terminator
 
 atlead:	db	'AT command: ',0
 crlfb:	db	CR,LF,0
 atretm:	db	'AT response: ',0
 
 ;
-; variation on atcmd, where we send in a length in c
+; send null-terminated command in HL
+; expecting DE bytes back in retbuf
+;
+atcmd:	
+	push	hl
+	push	de
+	ex	de,hl
+	call	strlen
+	ld	b,h
+	ld	c,l
+	pop	de
+	pop	hl		; fall through
+;
+; atcmd: run an AT command
+;	cmd ptr in HL
+; 	cmd length in BC
+; 	expected response length in DE
 ;
 atcmdl:
-	ld	(ss_rlen),a
-	ld	(ss_wbuf),hl
-	ld	a,c
-	jr	atgo
-;
-; send a simple command and get a simple answer
-; command in HL, expected response length in A
-atcmd:
-        ld      (ss_rlen),a
-        ld      (ss_wbuf),hl
-	ex	de,hl
-        call    strlen
-        ld      a,l
-atgo:	ld      (ss_wlen),a
+	ld	ix,wdesc
+	call	blddesc
+	ld	ix,rdesc
+	ld	hl,retbuf
+	ld	b,d
+	ld	c,e
+	call	blddesc
 
-	if	AT_DEBUG
-	ld	a,(debugf)
-	bit	1,a
-	jr	z,doat
-
-	ld	de,atlead
-	call	outstr
-	ld	a,(ss_rlen)
-	call	hex2
-	ld	de,crlfb
-	call	outstr
-	ld	hl,(ss_wbuf)
-	ld	a,(ss_wlen)
-	ld	c,a
-	call	hexdump
-	endif
-
-doat:	ld	hl,ss_wlen
-	ld	de,ss_rlen
+doat:	ld	hl,wdesc
+	ld	de,rdesc
         call    wrtread
-
-	if	AT_DEBUG
-	push	af
-	ld	a,(debugf)
-	bit	1,a
-	jr	z,nodbg
-	pop	af
-
-	push	af
-	push	af
-	ld	de,atretm
-	call	outstr
-	pop	af
-	call	hex2
-	ld	a,':'
-	call	outch
-	ld	a,c
-	call	hex2
-	ld	de,crlfb
-	call	outstr
-	ld	hl,(ss_rbuf)
-	ld	a,(ss_rlen)
-	ld	c,a
-	call	hexdump
-nodbg:
-	pop	af
-	endif
 
         ret
 ;

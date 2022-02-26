@@ -463,7 +463,7 @@ eloop:	dec     hl
 	; ATE0crlfcflfOKcrlf back, if we do, win!
 	;
 	ld	hl,ate		; turn echo mode off
-	ld	a,12
+	ld	de,12
 	call	atcmd
 
 	ld	hl,retbuf
@@ -472,7 +472,7 @@ eloop:	dec     hl
 	jr	nz,espreset	; if it didn't take
 
 	ld	hl,cfrd		; get configuration flash
-	ld	a,14+100+6	; +SYSFLASH:100,<data>crlfOKcrlf
+	ld	de,14+100+6	; +SYSFLASH:100,<data>crlfOKcrlf
 	call	atcmd
 
 	ld	a,(retbuf+9)	; we need a ':'
@@ -510,7 +510,7 @@ cfok:	spew	'm'
 	call	cpdelim
 
 	ld	hl,modest	; set AP mode, no autoconn
-	ld	a,6
+	ld	de,6
 	call	atcmd
 	call	ckok
 
@@ -546,8 +546,8 @@ wificon::
 	call	strcpy
 	ld	hl,crlf
 	call	strcpy
-	ld	a,7
 	ld	hl,cmdbuf
+	ld	de,7
 	call	atcmd
 	jr	c,gag
 	;
@@ -561,7 +561,7 @@ wificon::
 cloop:	spew	'P'
 	push	bc
 	ld	hl,wifis	; +CWSTATE:?,<ssid>CRLF
-	ld	a,12
+	ld	de,12
 	call	atcmd
 	pop	bc
 	jr	c,gag
@@ -612,7 +612,7 @@ srvping:spew	'p'
 	ld	hl,crlf
 	call	strcpy	
 	ld	hl,cmdbuf	; +PING:TIMEOUTcrlf or PING:<x>crlf
-	ld	a,9
+	ld	de,9
 	call	atcmd
 	ld	a,(retbuf+6)
 	cp	'T'
@@ -644,17 +644,17 @@ srvcon:	spew	'C'
 	call	strcpy
 
 	ld	hl,cmdbuf
-	ld	a,13
+	ld	de,13
 	call	atcmd
 	jr	c,losec
 
 	ld	hl,conmdr	; set polled (passive) recv mode
-	ld	a,4
+	ld	de,4
 	call	atcmd
 	jr	c,losec
 
 	ld	hl,conmdt	; set normal transmission mode
-	ld	a,4
+	ld	de,4
 	call	atcmd
 	jr	c,losec
 
@@ -673,7 +673,7 @@ srvoff: db      'AT+CIPCLOSE',CR,LF,0
 
 srvdis:
 	ld	hl,srvoff
-        ld      a,6
+        ld      de,6
         call    atcmd
 	ret	nc
 

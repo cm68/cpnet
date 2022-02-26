@@ -190,14 +190,6 @@ init:
 	push	de
 	push	bc
 
-	ld	hl,0
-	ld	c,32
-	call	hexdump
-
-	ld	hl,(6)
-	ld	c,32
-	call	hexdump
-	
 	call	ntwkin		; if we return nonzero, unhook
 	or	a
 	jp	nz,unhook
@@ -217,10 +209,6 @@ init:
 	ld	de,upmsg
 	ld	c,pstr
 	call	next
-
-	ld	hl,0
-	ld	c,32
-	call	hexdump
 
 	pop	bc
 	pop	de

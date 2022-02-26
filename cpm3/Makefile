@@ -54,6 +54,10 @@ logoff.com:	logoff.180
 endlist.com:	endlist.180
 local.com:	local.180
 
-hd: $(OBJECTS)
+hdc: $(OBJECTS)
 	cd ~/src/RomWBW/Source/Images ; rm hd_cpnet.img hd_cpm3.img hd_combo.img  ; make
 	sudo dd bs=1024k if=$(HOME)/src/RomWBW/Source/Images/hd_combo.img of=/dev/sdc
+
+hdd: $(OBJECTS)
+	cd ~/src/RomWBW/Source/Images ; rm hd_cpnet.img hd_cpm3.img hd_combo.img  ; make
+	sudo dd bs=1024k if=$(HOME)/src/RomWBW/Source/Images/hd_combo.img of=/dev/sdd

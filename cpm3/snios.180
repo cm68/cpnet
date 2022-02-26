@@ -50,6 +50,7 @@
 	extrn	dprint
 	extrn	hexdump
 	extrn	hex2
+	extrn	hex4
 	extrn	cr1
 	extrn	newline
 
@@ -174,6 +175,7 @@ wlen:	dw	0
 clen:	db	0
 
 sndmsg:
+	di
 sndmsg0:
 	ld	(wma),bc	; save header + payload address
 	inc	bc
@@ -186,11 +188,13 @@ sndmsg0:
 	add	a,6		; 5 for header, plus 0 means 1.
 	ld	(wlen),a
 
+ifdef	DEBUG
 	ld	a,'>'
 	call	cr1
 	ld	hl,(wma)
 	ld	bc,(wlen)
 	call	hexdump
+endif
 
 	ld	hl,atput	; build command
 	ld	de,cmdbuf
@@ -203,8 +207,8 @@ sndmsg0:
 	ld	hl,crlf
 	call	strcpy
 
-	ld	hl,cmdbuf	; send out send command
-	ld	a,9		
+	ld	hl,cmdbuf
+	ld	de,9
 	call	atcmd
 	jr	c,slose
 
@@ -226,10 +230,13 @@ sndmsg0:
 	jr	z,slose
 
 	xor	a
+sret:
+	ei
 	ret
 
 slose:	
 	ld	a,0ffh
+	ei
 	ret
 
 ;
@@ -260,41 +267,36 @@ atget:	db	'AT+CIPRECVDATA=',0
 orma:	dw	0
 rma:	dw	0		; recv buffer address
 
-rlen:	db	0		; length of payload
 doff:	db	0		; offset into recv buffer of payload
-avail:	db	0		; set as side-effect of waitav
+
+avail:	dw	0		; set as side-effect of waitav
+rlen:	dw	0		; length of payload
 
 rlose:	
 	ld	a,0ffh
+	ei
 	ret
 
 rcvmsg:	
+	di
 	ld	(rma),bc	; save pointers
 	ld	(orma),bc
 
-	ld	a,5
+	ld	hl,5
 	call	waitav
-
-ifdef	DEBUG
 	ld	a,'0'
-endif
 	jr	c,rlose
 
 rhdr:	ld	hl,atghdr	; get the 5 byte header
 	ld	a,25
 	call	atcmd
-ifdef	DEBUG
 	ld	a,'1'
-endif
 	jr	c,rlose
 
-ifdef	DEBUG
-	ld	a,'{'		; dump the whole retbuf
-	call	cr1
-	ld	hl,retbuf
-	ld	c,25
-	call	hexdump
-endif
+	ld	hl,(retbuf+19)	; how much payload is needed?
+	ld	h,0
+	inc	hl
+	ld	(rlen),hl
 
 	ld	hl,retbuf+15	; copy out the header
 	ld	de,(rma)
@@ -310,26 +312,18 @@ ifdef	DEBUG
 	call	hexdump
 endif
 
-	ld	a,(avail)	; subtract the amount we read
-	sub	5
-	ld	(avail),a
-
-ifdef	DEBUG
-	call	hex2
-	call	newline
-endif
-
-	ld	a,(retbuf+19)	; how much payload is needed?
-	inc	a
-	ld	(rlen),a
-
 	;
 	; if it isn't already known to be there from the previous call,
 	; wait for payload to be available
 	;
 
-	ld	l,a
-	ld	a,(avail)
+	ld	hl,(avail)	; subtract the amount we read
+	ld	de,5
+	or	a
+	sbc	hl,de
+
+	ld	hl,(rlen)
+	ld	de,(avail)
 	cp	l
 	jr	z,rdata
 	jr	nc,rdata
@@ -378,6 +372,7 @@ endif
 	ld	de,(rma)
 	ldir			; copy it out
 
+ifdef	DEBUG
 	ld	a,'<'
 	call	cr1
 	ld	hl,(orma)
@@ -385,30 +380,31 @@ endif
 	add	5
 	ld	c,a
 	call	hexdump
+endif
 
 	xor	a
+	ei
 	ret
 
 ;
-; poll until the receiver has at least A bytes available.
+; poll until the receiver has at least HL bytes available.
 ; this means sending a CIPREVLEN? and waiting for the answer to be
 ; at least what we want.  the size of the read we issue is 19,
 ; big enough for +CIPRECVLEN:0crlfOKcrlf, the minimum returned
-; return the size readable in A.  this could prevent extra polling
+; return the size readable in HL.  this could prevent extra polling
 ;
 glen:	db	'AT+CIPRECVLEN?',CR,LF,0	; get socket readable length
-need:	db	0
+
+need:	dw	0
 
 waitav:
-	ld	(need),a
+	ld	(need),hl
 
-ifdef	DEBUG
 	ld	a,'?'
 	call	dprint
-	ld	a,(need)
-	call	hex2
-	call	newline
-endif
+	ld	hl,(need)
+	call	hex4
+	ld	a,'='
 	
 	xor	a
 	ld	(retbuf+11),a
@@ -425,7 +421,7 @@ waitl:
 	; due to the silly AT "passive" protocol having async notifications
 	; if data movement, we might get silly +IPD messages or SEND OK
 	; if so, then it won't look like the expected recv len response
-	; just retry in this case
+	; just retry immediately in this case
 	;
 	ld	hl,retbuf+11	; +CIPRECVLEN:<int>,<int>...crlf
 	ld	a,':'
@@ -438,14 +434,14 @@ waitl:
 	inc	hl
 	ex	de,hl
 	call	atoi		; get length of available data
-	ld	a,l
-	ld	(avail),a
-	ld	a,(need)
-	cp	l
-	jr	c,wwin		; if more available
+	ld	(avail),hl
+	ld	de,(need)
+	or	a
+	sbc	hl,de
+	jr	nc,wwin		; if more available
 	jr	z,wwin		; if just enough
 
-	ld	hl,1024
+	ld	hl,0ff00h
 pause1: dec	hl
 	ld	a,h
 	or	l
@@ -472,6 +468,9 @@ endif
 	ret
 
 wwin:	xor	a
+	ld	hl,(avail)
+	call	hex4
+	call	newline
 	ret
 
 ntwker:
