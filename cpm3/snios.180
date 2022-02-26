@@ -299,11 +299,13 @@ rhdr:	ld	hl,atghdr	; get the 5 byte header
 	inc	hl
 	ld	(rlen),hl	
 
+if	DEBUG > 1
 	ld	a,'!'
 	call	dprint
 	ld	hl,(rlen)
 	call	hex4
 	call	newline
+endif
 
 	ld	hl,retbuf+15	; copy out the header
 	ld	de,(rma)
@@ -403,13 +405,14 @@ need:	dw	0
 waitav:
 	ld	(need),hl
 
+if	DEBUG > 1
 	ld	a,'?'
 	call	dprint
 	ld	hl,(need)
 	call	hex4
 	ld	a,'='
 	call	dprint
-	
+endif	
 	xor	a
 	ld	(retbuf+11),a
 	ld	(retbuf+12),a
@@ -472,9 +475,11 @@ endif
 	ret
 
 wwin:	xor	a
+if	DEBUG > 1
 	ld	hl,(avail)
 	call	hex4
 	call	newline
+endif
 	ret
 
 ntwker:
