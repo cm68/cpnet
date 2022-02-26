@@ -36,6 +36,14 @@
 uchar allocv[256];
 
 
+/*
+ * this implementation has a serious problem:  the case sensitivity of unix filesystems
+ * clashes with the case insensitivity of CP/M.  in particular, the search for first
+ * and search for next operations return FCB's that later fail to open.
+ * the real fix for this is to make everything case insensitive. the fix implemented
+ * here is to simply not show files that are not exclusively LOWER case anywhere.
+ */
+
 /*----------------------------------------------------------------------*/
 
 struct cpmfcb *get_dir_entry(DIR *dirp, struct cpmfcb *search_fcb, int first) {
@@ -82,10 +90,19 @@ struct cpmfcb *get_dir_entry(DIR *dirp, struct cpmfcb *search_fcb, int first) {
 
   while (1) {
     while ((dp = readdir(dirp))) {
-      if ((strcmp(dp->d_name, ".") != 0) &&
-          (strcmp(dp->d_name, "..") != 0)) break;
+	/* filter out names we don't like */
+      char *p;
+      if (strcmp(dp->d_name, ".") == 0) continue;
+      if (strcmp(dp->d_name, "..") == 0) continue;
+      for (p = dp->d_name; *p ; p++) {
+	if ((*p >= 'A') && (*p <= 'Z')) { 
+		printf("rejecting name %s\n", dp->d_name);
+		p = 0; 
+		break;
+	}
+      }
+      if (p) break;
     }
-  
     if (!dp) return NULL;  /* no more entries */
 
     /* last_search.drive = userno; - done by the caller */

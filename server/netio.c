@@ -77,10 +77,10 @@ void wait_for_packet() {
 
 int get_packet(char *data, int *len, int *fnc, int *sid) {
   int i, n, did, siz;
-  unsigned char buf[1024], cks;
+  char buf[1024], cks;
 
   if (portnum) {
-	i = socket_receive(&buf, sizeof(buf));
+	i = socket_receive(buf, sizeof(buf));
 	if (i < 5) {
 		return -1;	
 	}

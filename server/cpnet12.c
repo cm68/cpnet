@@ -310,6 +310,12 @@ int cpnet_12() {
           user = buf[0];
           memcpy((void *) &fcb, (void *) &buf[1], 36);
           ip = (int *) fcb.dmap;
+	/*
+	 * XXX - this is the most repugnant shit!
+	 * we take a file descriptor from the FCB and use it sight unseen?
+	 * what kind of horrible crap is going on here?
+	 * the comment:  YA THINK? 
+	 */
           fd = *ip;     /* TODO: check for valid fd? */
           fpos = (fcb.ex * 256L + fcb.cr) * 128L;
           lseek(fd, fpos, SEEK_SET);
@@ -452,6 +458,7 @@ int cpnet_12() {
           cdisk = buf[0];
           /* TODO: check for valid disk */
           update_allocv();
+	  buf[0] = 1;
           send_packet(sid, 27, allocv, 256);
         } else {
           send_error(sid, 27);  /* check NDOS for this case */
@@ -558,7 +565,7 @@ int cpnet_12() {
           int retc, userno, nrec;
           struct stat stbuf;
           userno = buf[0];
-          memcpy((void *) &fcb, (void *) &buf[1], 13);
+          memcpy((void *) &fcb, (void *) &buf[1], 36);
           retc = 0;
           if (fcb.drive > 0) {
             if (goto_drive(fcb.drive - 1) != 0) retc = 0xff;

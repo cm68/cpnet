@@ -73,6 +73,12 @@ socket_open(char *sdev)
         return -1;
     }
 
+    off = 1;
+    if (setsockopt(_fdo, SOL_SOCKET, SO_REUSEADDR, (char *) &off, sizeof(int)) < 0) {
+        perror("setsockopt SO_REUSEADDR");
+        return -1;
+    }
+
     /* bind the socket */
     laddr.sin_family = AF_INET;
     laddr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -138,8 +144,9 @@ int
 socket_send(char *buf, int len)
 {
     int i;
+    unsigned char *ubuf = (unsigned char *)buf;
 
-	if (_fdo < 0)
+    if (_fdo < 0)
 		return -1;
     if (_debug & DEBUG_LOW) {
         fprintf(stderr, "sockio_send len: %d\n", len);
@@ -147,6 +154,12 @@ socket_send(char *buf, int len)
     }
 	if (len < 0)
 		len = strlen(buf);
+
+    if ((ubuf[4] + 6) != len) {
+        printf("--------------------------------request %x does not match length %x!\n",
+            ubuf[4]+6, len);
+        printf("%x %x %x %x %d %d\n", ubuf[0], ubuf[1], ubuf[2], ubuf[3], ubuf[4], len);
+    }
 	if ((i = send(_fdo, buf, len, 0)) == len) {
 		return 0;
     }
@@ -158,13 +171,42 @@ socket_send(char *buf, int len)
 }
 
 /*
+ * wait until we get at least min bytes
+ */
+void
+sock_wait(int min)
+{
+    fd_set ins;
+    int i, n;
+
+    while (1) {
+        FD_ZERO(&ins);
+        FD_SET(_fdi, &ins);
+
+        i = select(_fdi+1, &ins, 0, 0, 0);
+        if (i < 0) {
+            fprintf(stderr, "sockio_select returns %d\n", i);
+            perror("select");
+            continue;
+        }
+        i = ioctl(_fdi, FIONREAD, &n);
+        if (i < 0) {
+            fprintf(stderr, "sockio fionread returns %d\n", i);
+            perror("ioctl");
+            continue;
+        }
+        if (n >= min) return;
+    }
+}
+
+/*
  * we should be able to read the entire request without timeouts.
  * if any of the intermediate characters time out, we have a problem.
  */
 int
 socket_receive(char *buf, int len)
 {
-	int i, n;
+	int i, n, t, need;
 
 	if (_fdo < 0)
 		return -1;
@@ -173,14 +215,30 @@ socket_receive(char *buf, int len)
         fprintf(stderr, "sockio_receive len: %d", len);
     }
 
-	n = recv(_fdi, buf, len, 0);
-    if (n == -1) {
-       perror("read failed");
-       exit(0);
+    /*
+     * due to the vagaries of TCP, we could get a short read.
+     * we ain't playing that shit. 
+     * wait for and read the header. 
+     * find out how much payload, and then wait for and read that.
+     */
+    sock_wait(5);
+    n = recv(_fdi, buf, 5, 0);
+    if (n != 5) {
+            fprintf(stderr, "sockio header read returns %d\n", n);
+            return -1;
+    }
+    need = buf[4] + 1;
+    sock_wait(need);
+	n = recv(_fdi, &buf[5], need, 0);
+    if (n != need) {
+            fprintf(stderr, "sockio payload read returns %d expected %d\n", n, need);
+            return -1;
 	}
 
+    n += 5;
+
     if (_debug & DEBUG_LOW) {
-        fprintf(stderr, " ret %d\n", i);
+        fprintf(stderr, " ret %d\n", n);
     }
 	return n;
 }
