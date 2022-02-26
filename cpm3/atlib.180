@@ -26,7 +26,17 @@
 	public	cr1
 	public	newline
 
-AT_DEBUG	equ	1
+; DEBUG	equ	1
+
+ifdef   DEBUG
+spew    macro   ch
+        ld      a,ch
+        call    dprint
+        endm
+else
+spew    macro   ch
+        endm
+endif
 
 debugf:db	0
 
@@ -226,6 +236,7 @@ atretm:	db	'AT response: ',0
 ; expecting DE bytes back in retbuf
 ;
 atcmd:	
+	spew	'A'
 	push	hl
 	push	de
 	ex	de,hl
@@ -241,6 +252,7 @@ atcmd:
 ; 	expected response length in DE
 ;
 atcmdl:
+	spew	'a'
 	ld	ix,wdesc
 	call	blddesc
 	ld	ix,rdesc

@@ -54,6 +54,8 @@
 	extrn	cr1
 	extrn	newline
 
+; DEBUG	equ	1
+
 	cseg
 
 ; Initial Slave Configuration Table - must be first in module
@@ -217,9 +219,8 @@ endif
 	call	ismatch
 	jr	nz,slose
 
-	ld	a,(wlen)	; send header+payload
-	ld	c,a
-	ld	a,7		; we can expect 'ERRORcrlf'
+	ld	bc,(wlen)	; send header+payload
+	ld	de,7		; we can expect 'ERRORcrlf'
 	ld	hl,(wma)	; payload address
 	call	atcmdl
 	jr	c,slose
@@ -288,7 +289,7 @@ rcvmsg:
 	jr	c,rlose
 
 rhdr:	ld	hl,atghdr	; get the 5 byte header
-	ld	a,25
+	ld	de,25
 	call	atcmd
 	ld	a,'1'
 	jr	c,rlose
@@ -296,7 +297,7 @@ rhdr:	ld	hl,atghdr	; get the 5 byte header
 	ld	hl,(retbuf+19)	; how much payload is needed?
 	ld	h,0
 	inc	hl
-	ld	(rlen),hl
+	ld	(rlen),hl	
 
 	ld	hl,retbuf+15	; copy out the header
 	ld	de,(rma)
@@ -320,15 +321,15 @@ endif
 	ld	hl,(avail)	; subtract the amount we read
 	ld	de,5
 	or	a
-	sbc	hl,de
+	sbc	hl,de		; hl is now the available data
 
-	ld	hl,(rlen)
-	ld	de,(avail)
-	cp	l
-	jr	z,rdata
-	jr	nc,rdata
+	ld	de,(rlen)	; subtract the amount we want
+	or	a
+	sbc	hl,de		
+	jr	z,rdata		; just right, go
+	jr	nc,rdata	; more than enough, go
 
-	ld	a,l
+	ex	de,hl
 	call	waitav
 ifdef	DEBUG
 	ld	a,'2'
@@ -338,8 +339,7 @@ endif
 rdata:	ld	hl,atget	; build recv command
 	ld	de,cmdbuf
 	call	strcpy
-	ld	hl,(rlen)	; size byte
-	ld	h,0
+	ld	hl,(rlen)
 	call	itoa
 	add	13+1		; '+CIPRECVDATA:' and ','	
 	ld	(doff),a
@@ -349,10 +349,12 @@ rdata:	ld	hl,atget	; build recv command
 	; response will be exactly:
 	; +CIPRECVDATA:<len>,<data>CRLFOKCRLF
 	;
-	ld	a,(rlen)
+	ld	de,(rlen)
 	ld	hl,(doff)
-	add	l		; and how much data expected
-	add	6		; tail: crlfOKcrlf
+	ld	h,0
+	add	hl,de		; and how much data expected
+	ld	de,6		; tail: crlfOKcrlf
+	ex	de,hl
 	ld	hl,cmdbuf
 	call	atcmd
 
@@ -362,13 +364,10 @@ endif
 	jp	c,rlose
 
 	ld	hl,retbuf	; point at the payload
-	ld	a,(doff)
+	ld	de,(doff)
 	ld	d,0
-	ld	e,a
 	add	hl,de
-	ld	b,d
-	ld	a,(rlen)
-	ld	c,a
+	ld	bc,(rlen)
 	ld	de,(rma)
 	ldir			; copy it out
 
@@ -405,14 +404,15 @@ waitav:
 	ld	hl,(need)
 	call	hex4
 	ld	a,'='
+	call	dprint
 	
 	xor	a
 	ld	(retbuf+11),a
 	ld	(retbuf+12),a
 waitl:
 	ld	hl,glen		; how much do you got?
-	ld	c,16
-	ld	a,19
+	ld	bc,16
+	ld	de,19
 	call	atcmdl
 	ld	a,'0'
 	jr	c,wlose

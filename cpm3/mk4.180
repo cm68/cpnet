@@ -45,6 +45,8 @@
 ;
 	include	mk4.lib
 
+; DEBUG	equ	1
+
 	public	espreset
 	public	wrtread
 	public	setbaud
@@ -173,7 +175,7 @@ WRTIME	equ	0ffffh
 WRTIME1	equ	00001h
 
 wrtread:
-	; spew	'W'
+	spew	'W'
 
 	call	flushi		; clear the decks
 	push	de
@@ -214,7 +216,7 @@ w_wtry:	getstat
 	; the read side still has space. let's initialize a timer.
 	; the timer is only valid if B is zero.
 	;	
-	; spew	'T'
+	spew	'T'
 
 	ld	hl,1
 	ld	de,3
@@ -272,7 +274,7 @@ w_rcv:	getrx			; read a byte
 
 wrdone: call	flushi
 
-	; spew	'D'
+	spew	'D'
 	
 	xor	a
 	ret
@@ -284,15 +286,17 @@ wtimeout:
 	exx
 	inc	a
 
-	; spew	'X'
+	spew	'X'
 
-	scf
+	xor	a
+	dec	a
 	ret
 w_rovr:
 	call	flushi
 
-	; spew	'V'
+	spew	'V'
 
+	xor	a
 	dec	a
 	ret
 ;
@@ -424,8 +428,8 @@ cfrd:	db	'AT+SYSFLASH=2,"mqtt_cert",0,100',CR,LF,0
 ; set A to 2 to attempt to connect to host
 
 espreset:
-	spew	'r'
 	ld	(mode),a
+	spew	'r'
 
 	ld	a,(retry)
 	dec	a
@@ -553,7 +557,7 @@ wificon::
 	;
 	; let's poll for our connected state
 	;
-	ld	hl,4
+	ld	hl,6
 	call	delay
 
 	ld	b,4

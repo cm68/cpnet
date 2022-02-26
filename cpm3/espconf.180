@@ -77,7 +77,7 @@ cmdbuf:	ds	256
 retbuf:	ds	256
 conf:	ds	256
 
-mode:	db	0
+opt:	db	0
 
 start:
 	ld	hl,080h
@@ -97,19 +97,19 @@ nxtopt: ld	a,(hl)
 	jr	nc,oloop
 	ld	(debugf),a
 	jr	oloop
-mdset:	ld	(mode),a
+mdset:	ld	(opt),a
 oloop:	inc	hl
 	djnz	nxtopt
 
 nod:
 	ld	de,signon
 	call	outstr
-	ld	a,(mode)
+	ld	a,(opt)
 	or	a
 	jr	z,der
 	ld	de,modem
 	call	outstr
-	ld	a,(mode)
+	ld	a,(opt)
 	call	putch
 	
 der:	ld	a,(debugf)
@@ -133,7 +133,7 @@ stail:	ld	de,crlf
 	ld	de,resete
 	jp	c,lose
 
-	ld	a,(mode)
+	ld	a,(opt)
 	cp	'F'
 	jr	nz,rcf
 
