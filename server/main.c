@@ -50,6 +50,7 @@
 #include "cpnet11.h"
 #include "cpnet12.h"
 #include "netio.h"
+#include "sockio.h"
 #include "sio.h"
 #include "inifile.h"
 #include "cpmutl.h"
