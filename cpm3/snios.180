@@ -54,7 +54,7 @@
 	extrn	cr1
 	extrn	newline
 
-; DEBUG	equ	1
+DEBUG	equ	1
 
 	cseg
 
@@ -190,7 +190,7 @@ sndmsg0:
 	add	a,6		; 5 for header, plus 0 means 1.
 	ld	(wlen),a
 
-ifdef	DEBUG
+if	DEBUG > 1
 	ld	a,'>'
 	call	cr1
 	ld	hl,(wma)
@@ -268,7 +268,7 @@ atget:	db	'AT+CIPRECVDATA=',0
 orma:	dw	0
 rma:	dw	0		; recv buffer address
 
-doff:	db	0		; offset into recv buffer of payload
+doff:	dw	0		; offset into recv buffer of payload
 
 avail:	dw	0		; set as side-effect of waitav
 rlen:	dw	0		; length of payload
@@ -299,13 +299,19 @@ rhdr:	ld	hl,atghdr	; get the 5 byte header
 	inc	hl
 	ld	(rlen),hl	
 
+	ld	a,'!'
+	call	dprint
+	ld	hl,(rlen)
+	call	hex4
+	call	newline
+
 	ld	hl,retbuf+15	; copy out the header
 	ld	de,(rma)
 	ld	bc,5
 	ldir
 	ld	(rma),de
 
-ifdef	DEBUG
+if	DEBUG > 1
 	ld	a,'<'		; dump out the header
 	call	cr1
 	ld	hl,(orma)
@@ -351,7 +357,6 @@ rdata:	ld	hl,atget	; build recv command
 	;
 	ld	de,(rlen)
 	ld	hl,(doff)
-	ld	h,0
 	add	hl,de		; and how much data expected
 	ld	de,6		; tail: crlfOKcrlf
 	ex	de,hl
@@ -365,13 +370,12 @@ endif
 
 	ld	hl,retbuf	; point at the payload
 	ld	de,(doff)
-	ld	d,0
 	add	hl,de
 	ld	bc,(rlen)
 	ld	de,(rma)
 	ldir			; copy it out
 
-ifdef	DEBUG
+if	DEBUG > 1
 	ld	a,'<'
 	call	cr1
 	ld	hl,(orma)
@@ -426,7 +430,7 @@ waitl:
 	ld	hl,retbuf+11	; +CIPRECVLEN:<int>,<int>...crlf
 	ld	a,':'
 	cp	(hl)
-	jp	nz,waitl	; not what we expected
+	jp	nz,pause0	; not what we expected
 
 	;
 	; got an answer, see if it's enough
@@ -441,7 +445,7 @@ waitl:
 	jr	nc,wwin		; if more available
 	jr	z,wwin		; if just enough
 
-	ld	hl,0ff00h
+pause0:	ld	hl,0ff00h
 pause1: dec	hl
 	ld	a,h
 	or	l
