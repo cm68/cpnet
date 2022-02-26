@@ -90,18 +90,28 @@ struct cpmfcb *get_dir_entry(DIR *dirp, struct cpmfcb *search_fcb, int first) {
 
   while (1) {
     while ((dp = readdir(dirp))) {
+	int l = 0;
+	int m = 0;
 	/* filter out names we don't like */
       char *p;
       if (strcmp(dp->d_name, ".") == 0) continue;
       if (strcmp(dp->d_name, "..") == 0) continue;
       for (p = dp->d_name; *p ; p++) {
+	if (m == 0) {
+		if (*p == '.') { l = 0 ; m++; continue; }
+		if (++l == 9) { p = 0; break; }
+	} else if (m == 1) {
+		if (++l == 4) { p = 0; break; }
+	}
 	if ((*p >= 'A') && (*p <= 'Z')) { 
-		printf("rejecting name %s\n", dp->d_name);
 		p = 0; 
 		break;
 	}
       }
-      if (p) break;
+      if (p) {
+	break;
+      }
+	printf("rejecting name %s\n", dp->d_name);
     }
     if (!dp) return NULL;  /* no more entries */
 
