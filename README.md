@@ -8,7 +8,8 @@ otherwise useless RS-425 serial port.
 
 https://sites.google.com/a/zen-room.org/home/the-zen-room/mark-iv-wifi
 
-Status:  It's still a bit broken
+Status:  Read works, at 230400 baud.
+	write data integrity is hopeless.
 
 this work is derived from:
 
