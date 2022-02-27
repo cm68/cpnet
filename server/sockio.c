@@ -207,6 +207,7 @@ int
 socket_receive(char *buf, int len)
 {
 	int i, n, t, need;
+    unsigned char *ubuf = (unsigned char *)buf;
 
 	if (_fdo < 0)
 		return -1;
@@ -227,7 +228,8 @@ socket_receive(char *buf, int len)
             fprintf(stderr, "sockio header read returns %d\n", n);
             return -1;
     }
-    need = buf[4] + 1;
+    /* printf("%02x %02x %02x %02x %02x\n", ubuf[0], ubuf[1], ubuf[2], ubuf[3], ubuf[4]); */
+    need = ubuf[4] + 1;
     sock_wait(need);
 	n = recv(_fdi, &buf[5], need, 0);
     if (n != need) {
