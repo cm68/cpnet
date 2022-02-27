@@ -8,11 +8,51 @@
 #include <sys/select.h>
 #include <termios.h>
 #include <fcntl.h>
+#include <string.h>
+
+int fd;
+
+void
+changebaud(int rate)
+{
+	int i;
+	struct termios ti;
+
+	if (tcgetattr(fd, &ti) < 0) {
+		perror("gettermios");
+		exit(-2);
+	}
+
+	switch (rate) {
+	case 230400:
+		cfsetspeed(&ti, B230400);
+		break;
+	case 115200:
+		cfsetspeed(&ti, B115200);
+		break;
+	case 57600:
+		cfsetspeed(&ti, B57600);
+		break;
+	case 38400:
+		cfsetspeed(&ti, B38400);
+		break;
+	case 19200:
+		cfsetspeed(&ti, B19200);
+		break;
+	default: 
+		printf("could not find baud rate %d\n", rate);
+		return;
+	}
+	printf("---------- CHANGE BAUD RATE To %d -----------\n", rate);
+	if (tcsetattr(fd, TCSANOW, &ti) < 0) {
+		perror("settermios");
+		exit(-3);
+	}
+}
 
 int
 main(int argc, char **argv)
 {
-	int fd;
 	struct termios ti;
 	int i;
 	unsigned char c;
@@ -33,6 +73,7 @@ main(int argc, char **argv)
 		perror(argv[1]);
 		exit(-2);
 	}
+reset:
 	if (tcgetattr(fd, &ti) < 0) {
 		perror("gettermios");
 		exit(-2);
@@ -67,6 +108,7 @@ main(int argc, char **argv)
 
 			read(0, trash, 100);
 			system("clear");
+			goto reset;
 		}
 		if (ioctl(fd, FIONREAD, &bytes) < 0) {
 			perror("FIONREAD");
@@ -79,6 +121,17 @@ main(int argc, char **argv)
 		ca[col] = c;
 		col++;
 		if ((c == 0x0a) || (col == (ln - 1))) {
+			int baud;
+			/*
+			 * interesting hack: if we see the line look like
+			 * a baud rate change, change the baud rate
+			 * note that this ONLY works if baud rate changes
+			 * are done in echo mode.
+			 */
+			if (strncmp(ca, "AT+UART_CUR=", 12) == 0) {
+				baud = atoi(&ca[12]);
+				changebaud(baud);
+			}
 			for (i = 0; i < ln; i++) {
 				if (i < col) {
 					printf("%02x ", ca[i]);
