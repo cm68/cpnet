@@ -10,7 +10,6 @@
 	extrn	itoa,atoi,strlen,cpdelim
 	extrn	ismatch
 	extrn	strcpy
-	extrn	sreset
 	extrn	wrtread
 	extrn	espreset
 	extrn	atcmd
@@ -123,10 +122,6 @@ der:	ld	a,(debugf)
 
 stail:	ld	de,crlf
 	call	outstr
-
-	call	sreset
-	ld	de,resets
-	jp	c,lose
 
 	ld	a,0			; don't connect
 	call	espreset

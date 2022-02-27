@@ -35,7 +35,6 @@
 	public	cmdbuf
 
 	extrn	espreset
-	extrn	sreset
 	extrn	wrtread
 	extrn	atcmd
 	extrn	atcmdl
@@ -113,9 +112,6 @@ ifdef	DEBUG
 	ld	a,0
 	ld	(debugf),a
 endif
-	call	sreset
-	jp	c,initerr
-
 	ld	a,2
 	call	espreset	; reset the esp with connect
 	jp	c,initerr

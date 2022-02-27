@@ -45,7 +45,7 @@
 ;
 	include	mk4.lib
 
-; DEBUG	equ	1
+DEBUG	equ	1
 
 	public	espreset
 	public	wrtread
@@ -70,7 +70,12 @@
 	extrn	atcmd
 	extrn	ckok
 ifdef	DEBUG
+	extrn	hex2
+	extrn	hex4
+	extrn	hexdmps
 	extrn	dprint
+	extrn	outstr
+	extrn	newline
 endif
 
 ifdef	DEBUG
@@ -319,6 +324,7 @@ ldfin:	ex	de,hl		; buffer in hl
 	ret	nz
 	scf
 	ret
+
 ;
 ; change the baud rate to HL * 100
 ; FIXME: allow setting the baud rate to 512k.
@@ -333,46 +339,132 @@ ldfin:	ex	de,hl		; buffer in hl
 ; else if BRG mode baud rate = fPHI/(2*(TC+2)*Clock mode)
 ; else baud rate -fPHI/((10 + 20*PS) * 2^ss*Clock mode)
 ;
+; return nc for success.   this means that on slow cpu,
+; setting to 230400 might return error.
+;
+; the AT interface is assumed to be at 115k.
+;
 baud3x	equ	00010000b
-baud115	equ	9 + baud3x
-baud230	equ	10 + baud3x
 n_8_1	equ	000000011b
 CIOINIT	equ	4
 ASCI1	equ	1
+b115	equ	9 + baud3x
 
-setbaud:
-	ex	de,hl
-	ld	b,baud115
-	ld	hl,1152
-	or	a
-	sbc	hl,de
-	jr	z,gotb
-	ld	b,baud230
-	ld	hl,2304
-	or	a
-	sbc	hl,de	
-	ret	nz
-
-gotb:	ld	d,b
+;
+; actually do the bios call to set the baud rate to the code in A.
+;
+biosbaud:
+if	0
+	push	af
+	call	hex2
+	pop	af
+endif
+	ld	d,a
 	ld	e,n_8_1
 	ld	c,ASCI1
 	ld	b,CIOINIT	; set line characteristics
 	rst	8
 
-	ld	a,0		; disable sr1 interrupts
-	out0	(sr1stat),a
-
+if	0
+	push	af
+	call	hex2
+	call	newline
+	pop	af
+endif	
+	or	a
 	ret
 ;
-; initialize, returning carry if NFG.
+; baud rate table. these are baud / 100, and the HBIOS setting bits
 ;
-sreset:
-	ld	hl,1152
-	call	setbaud
+baudt:	dw	2304
+	db	10 + baud3x
+	dw	1152
+	db	9 + baud3x
+	dw	576
+	db	8 + baud3x
+	dw	384
+	db	9
+	dw	192
+	db	8
+	dw	0
+	db	0
+	
+atbaud:	db	'AT+UART_CUR='
+	ds	20
+atbt:	db	'00,8,1,0,0',CR,LF,0
+
+wantb:	dw	0
+bcode:	db	0
+	
+;
+; set the baud rate in both the uart and the AT command to HL * 100
+; of course, we need to do the AT command first, and then
+; the UART. we then check to see if an AT works.
+; return carry if anything does not go as planned
+;
+setbaud:
+	ld	(wantb),hl
+if	0
+	ld	a,'}'
+	call	outch
+	ld	hl,(wantb)
+	call	hex4
+	call	newline
+endif
+	ld	bc,baudt	; point at table
+	ld	de,0
+bsrch:	ld	hl,(wantb)	; restore	
+	ld	a,(bc)		; get rate low
+	inc	bc
+	ld	e,a
+	ld	a,(bc)		; get rate hi
+	inc	bc
+	ld	d,a
+	ld	a,(bc)		; get baud code
+	inc	bc
+	ld	(bcode),a
+	or	a
+	jr	z,blose		; not found
+	sbc	hl,de
+	jr	nz,bsrch	; miss ?
+
+	ld	de,atbaud+12	; build command
+	ld	hl,(wantb)
+	call	itoa
+	ld	hl,atbt
+	call	strcpy
+
+	ld	hl,atbaud	; send the change baud command. 
+	ld	de,26		; we are in echo mode, so lots coming back
+	call	atcmd
+
+	call	flushi
+
+	ld	a,(bcode)
+	call	biosbaud
+	jr	nz,blose
 
 	call	flushi
 
 	xor	a
+	out0	(sr1stat),a
+	ret
+
+blose:	scf
+	ret
+
+;
+; initialize, returning carry if NFG.
+;
+sblsm:	db	'setbaud fail',CR,LF,0
+sreset:
+	ld	a,b115
+	call	biosbaud
+	ret	z
+
+	ld	de,sblsm
+	call	outstr
+	scf
 	ret
 ;
 ; flush any input that might be there
@@ -409,10 +501,11 @@ pass:	ds	20		;      password
 host:	ds	20		; cp/net server
 port:	ds	5		;      port
 
-retry:	db	3
 mode:	db	0
 
-ate:	db	'ATE0',CR,LF,0
+ate1:	db	'ATE1',CR,LF,0
+
+ate0:	db	'ATE0',CR,LF,0
 ateok:	db	'ATE0',CR,LF,CR,LF,'OK',CR,LF,0
 
 modest:	db	'AT+CWMODE=1,0',CR,LF,0
@@ -421,30 +514,46 @@ cfrd:	db	'AT+SYSFLASH=2,"mqtt_cert",0,100',CR,LF,0
 ;
 ; reset the esp-01 by toggling the esprst bit
 ; drop it low, wait a little, then set it high
-; we've already reset the serial port, so the baud rate is correct
-; but, we'll want to probe for the best baud rate that works
+
 ; return carry set for error, error code in A
 ; on input, set A to 1 to attempt to connect to wifi
 ; set A to 2 to attempt to connect to host
 
+ptab:	dw	2304,1152,576,384,192,0
+bptr:	dw	ptab
+tbaud:	dw	0
+
 espreset:
 	ld	(mode),a
-	; spew	'r'
 
-	ld	a,(retry)
-	dec	a
-	ld	(retry),a
-	jr	nz,dorst
+	;
+	; reset the ESP and try the next baud rate
+	;
+nxtbaud:
+	call	sreset
+	ret	c
 
-lose:	xor	a
+	ld	hl,(bptr)	; get the next baud rate 
+	ld	e,(hl)
+	inc	hl
+	ld	d,(hl)
+	inc	hl
+	ld	a,d
+	or	e
+	ld	(bptr),hl
+	ld	(tbaud),de
+	jr	nz,trybd	; another baud to try
+
+lose:	xor	a		; out of options
 	dec	a
 	ret
 
-dorst:	ld	bc,sdopr
+trybd:	ld	bc,sdopr
 	in	a,(c)		; get the sd opr register
         or      esprst		; set the ESP-01 reset line low
         out	(c),a
-        ld      hl,rsttime
+
+        ld      hl,rsttime	; pulse the reset line for a bit
 eloop:	dec     hl
         ld      a,h
         or      l
@@ -459,21 +568,36 @@ eloop:	dec     hl
 
 	;
 	; clear any cruft in the serial fifo after the reset
+	; and delay
 	;
+	call	flushi
+
+	;
+	; we are running at 115200 at first by default, so we'll need
+	; to send the command to try to set the baud rate and then
+	; actually set the baud rate
+	;
+	ld	hl,(tbaud)
+	call	setbaud
+	jr	c,nxtbaud
+
+	ld	hl,ate1		; turn echo mode on - this is just a probe, really.
+	ld	de,6
+	call	atcmd
 	call	flushi
 
 	;
 	; we will initially be in echo mode , we'll get 
 	; ATE0crlfcflfOKcrlf back, if we do, win!
 	;
-	ld	hl,ate		; turn echo mode off
+	ld	hl,ate0		; turn echo mode off
 	ld	de,12
 	call	atcmd
 
 	ld	hl,retbuf
 	ld	de,ateok
 	call	ismatch
-	jr	nz,espreset	; if it didn't take
+	jp	nz,nxtbaud	; if it didn't take
 
 	ld	hl,cfrd		; get configuration flash
 	ld	de,14+100+6	; +SYSFLASH:100,<data>crlfOKcrlf
@@ -481,7 +605,7 @@ eloop:	dec     hl
 
 	ld	a,(retbuf+9)	; we need a ':'
 	cp	':'
-	jr	nz,rlose
+	jp	nz,nxtbaud
 
 	ld	a,(mode)
 	or	a
@@ -493,11 +617,7 @@ eloop:	dec     hl
 	ld	hl,retbuf+14	; check for magic number
 	ld	de,magic
 	call	ismatch
-	jr	z,cfok		; if we found it, all good
-
-rlose:	ld	a,1
-	scf
-	ret
+	jp	nz,nxtbaud	; no magic
 
 	;
 	; let's parse the configuration
